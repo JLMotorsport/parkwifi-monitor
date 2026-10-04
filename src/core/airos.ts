@@ -30,6 +30,8 @@ export class AirOSError extends Error {
 export class AirOSClient {
   private cookies = new Map<string, string>();
   private loggedIn = false;
+  /** step-by-step record of the last login, shown in errors so failures explain themselves */
+  private trace: string[] = [];
 
   constructor(
     readonly ip: string,
@@ -83,23 +85,38 @@ export class AirOSClient {
   }
 
   async login(): Promise<void> {
+    // 1. The radio hands out its own session cookie (AIROS_SESSIONID or AIROS_<mac>) on the login page.
     this.cookies.clear();
-    this.cookies.set('AIROS_SESSIONID', crypto.randomBytes(16).toString('hex'));
-    await this.request('GET', '/login.cgi');
+    this.trace = [];
+    const g = await this.request('GET', '/login.cgi');
+    this.trace.push(`GET /login.cgi ${g.status} cookies[${[...this.cookies.keys()].join(',') || 'none'}]`);
+    if (![...this.cookies.keys()].some((k) => k.startsWith('AIROS'))) {
+      // older builds expect the browser to make one up
+      this.cookies.set('AIROS_SESSIONID', crypto.randomBytes(16).toString('hex'));
+    }
 
-    const boundary = '----pwm' + crypto.randomBytes(8).toString('hex');
-    const field = (n: string, v: string) =>
-      `--${boundary}\r\nContent-Disposition: form-data; name="${n}"\r\n\r\n${v}\r\n`;
-    const body = Buffer.from(
-      field('uri', '/index.cgi') + field('username', this.username) + field('password', this.password) + `--${boundary}--\r\n`,
-      'utf8',
-    );
-    const r = await this.request('POST', '/login.cgi', body, {
-      'Content-Type': `multipart/form-data; boundary=${boundary}`,
+    // 2. Post the form exactly as the browser does; success is a 302 redirect.
+    const origin = this.port === 443 ? `https://${this.ip}` : `https://${this.ip}:${this.port}`;
+    const form = new URLSearchParams({ username: this.username, password: this.password, uri: '/index.cgi' }).toString();
+    const r = await this.request('POST', '/login.cgi', Buffer.from(form, 'utf8'), {
+      'Content-Type': 'application/x-www-form-urlencoded',
+      Origin: origin,
+      Referer: `${origin}/login.cgi`,
     });
-    // Success is a redirect; a failed login re-serves the login form with a 200.
-    if (r.status === 200 && /name=["']?password/i.test(r.body)) {
+    this.trace.push(`POST /login.cgi ${r.status}${r.headers.location ? ' -> ' + r.headers.location : ''}`);
+    if (r.status !== 302 && r.status !== 303) {
+      throw new AirOSError(`${this.ip}: login rejected (check username/password). Steps: ${this.trace.join('; ')}`, 'auth');
+    }
+    const loc = String(r.headers.location ?? '');
+    if (/login\.cgi/i.test(loc)) {
       throw new AirOSError(`${this.ip}: login rejected (check username/password)`, 'auth');
+    }
+
+    // 3. airOS 6 only activates the session once the landing page has been loaded.
+    const act = await this.request('GET', '/index.cgi', undefined, { Referer: `${origin}/login.cgi` });
+    this.trace.push(`GET /index.cgi ${act.status}${act.headers.location ? ' -> ' + act.headers.location : ''}`);
+    if ((act.status === 302 || act.status === 303) && /login\.cgi/i.test(String(act.headers.location ?? ''))) {
+      throw new AirOSError(`${this.ip}: session was not activated after login`, 'auth');
     }
     this.loggedIn = true;
   }
@@ -114,7 +131,7 @@ export class AirOSClient {
         this.loggedIn = false;
         return this.getJSON<T>(path, false);
       }
-      throw new AirOSError(`${this.ip}: not logged in after retry (HTTP ${r.status})`, 'auth');
+      throw new AirOSError(`${this.ip}: not logged in after retry (HTTP ${r.status} on ${path}). Login steps: ${this.trace.join('; ')}`, 'auth');
     }
     try {
       return JSON.parse(text) as T;

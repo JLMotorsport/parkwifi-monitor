@@ -28,9 +28,12 @@ const radios = {
     sta: [['3A:57:9D:9C:14:74', '192.168.2.88', -64, 26, 78, 93, 3]] },
 };
 
+// Mimics airOS 6 (XM): the login page sets an AIROS_<mac> cookie, the form is urlencoded,
+// and the session only becomes usable after /index.cgi has been loaded once.
+const pending = new Set();
 const sessions = new Set();
 const jitter = (v, a) => (v === undefined ? undefined : Math.round((v + (Math.random() - 0.5) * a) * 10) / 10);
-const cookie = (req) => (req.headers.cookie ?? '').match(/AIROS_SESSIONID=([0-9a-f]+)/)?.[1];
+const cookie = (req) => (req.headers.cookie ?? '').match(/AIROS_[0-9A-F]{12}=([0-9a-f]+)/)?.[1];
 
 function status(r) {
   const up = r.up + Math.round((Date.now() - boot) / 1000);
@@ -47,27 +50,35 @@ function status(r) {
 }
 
 for (const [ip, r] of Object.entries(radios)) {
+  const mac = '0027226447' + ip.split('.')[3].padStart(2, '0');
   https
     .createServer(tls, (req, res) => {
       const sid = cookie(req);
       if (req.url.startsWith('/login.cgi')) {
         if (req.method === 'GET') {
-          res.writeHead(200, { 'Content-Type': 'text/html' });
+          const fresh = sid ?? Math.random().toString(16).slice(2).padEnd(32, '0');
+          res.writeHead(200, { 'Content-Type': 'text/html', 'Set-Cookie': `AIROS_${mac}=${fresh}; Path=/; HttpOnly` });
           return res.end('<html><title>airOS</title><form method=post><input name="username"><input name="password" type=password></form></html>');
         }
         let body = '';
         req.on('data', (c) => (body += c));
         req.on('end', () => {
-          const ok = body.includes(`name="username"\r\n\r\n${USER}\r\n`) && body.includes(`name="password"\r\n\r\n${PASS}\r\n`);
+          const f = new URLSearchParams(body);
+          const ok = req.headers['content-type']?.includes('urlencoded') && f.get('username') === USER && f.get('password') === PASS;
           if (ok && sid) {
-            sessions.add(ip + sid);
-            res.writeHead(302, { Location: '/index.cgi' });
+            pending.add(ip + sid);
+            res.writeHead(302, { Location: f.get('uri') ?? '/index.cgi' });
             return res.end();
           }
-          res.writeHead(200, { 'Content-Type': 'text/html' });
-          res.end('<html>Invalid credentials<form><input name="password" type=password></form></html>');
+          res.writeHead(302, { Location: '/login.cgi?uri=/index.cgi' });
+          res.end();
         });
         return;
+      }
+      if (req.url.startsWith('/index.cgi') && sid && pending.has(ip + sid)) {
+        sessions.add(ip + sid);
+        res.writeHead(200, { 'Content-Type': 'text/html' });
+        return res.end('<html>main</html>');
       }
       if (!sid || !sessions.has(ip + sid)) {
         res.writeHead(302, { Location: '/login.cgi' });

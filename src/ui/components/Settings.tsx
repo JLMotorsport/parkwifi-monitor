@@ -208,6 +208,45 @@ export function Settings({ s, toast, onSaved }: { s: AppState; toast: (m: string
 
       <div className="card">
         <div className="card-h">
+          <h2>Other things to ping</h2>
+          <span className="sub">Routers or anything else worth watching. Ping only, no login.</span>
+          <span style={{ flex: 1 }} />
+          <button className="btn small" onClick={() => set('probes', [...c.probes, { id: 'probe-' + Date.now().toString(36), name: 'New target', host: '' }])}>
+            Add
+          </button>
+        </div>
+        <div className="card-b tbl-wrap">
+          <table>
+            <thead>
+              <tr>
+                <th>Name</th>
+                <th>Address</th>
+                <th />
+              </tr>
+            </thead>
+            <tbody>
+              {c.probes.map((p, i) => (
+                <tr key={p.id}>
+                  <td style={{ minWidth: 220 }}>
+                    <input value={p.name} onChange={(e) => set('probes', c.probes.map((x, j) => (j === i ? { ...x, name: e.target.value } : x)))} />
+                  </td>
+                  <td style={{ minWidth: 160 }}>
+                    <input className="mono" value={p.host} onChange={(e) => set('probes', c.probes.map((x, j) => (j === i ? { ...x, host: e.target.value.trim() } : x)))} />
+                  </td>
+                  <td>
+                    <button className="btn small danger" onClick={() => set('probes', c.probes.filter((_, j) => j !== i))}>
+                      Remove
+                    </button>
+                  </td>
+                </tr>
+              ))}
+            </tbody>
+          </table>
+        </div>
+      </div>
+
+      <div className="card">
+        <div className="card-h">
           <h2>Polling and alerts</h2>
         </div>
         <div className="card-b form">

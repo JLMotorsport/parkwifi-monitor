@@ -49,7 +49,7 @@ export function defaultConfig(): Config {
     devices,
     probes: [
       { id: 'internet', name: 'Internet (Google DNS)', host: '8.8.8.8' },
-      { id: 'udr3', name: 'House router (UDR3)', host: '192.168.2.1' },
+      { id: 'udr3', name: 'House router (UDR3)', host: '192.168.4.178' },
     ],
     chain: ['house-sender', 'lookout-station', 'lookout-sender', 'mast2-station', 'monks-station'],
     thresholds: {
@@ -80,6 +80,8 @@ export class ConfigStore {
     const def = defaultConfig();
     try {
       const raw = JSON.parse(fs.readFileSync(this.file, 'utf8'));
+      // 0.1.0 pinged UDR3's LAN side, which the office firewall policy doesn't let through.
+      for (const p of raw.probes ?? []) if (p.id === 'udr3' && p.host === '192.168.2.1') p.host = '192.168.4.178';
       return {
         ...def,
         ...raw,
