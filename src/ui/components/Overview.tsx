@@ -1,263 +1,276 @@
 import type { AppState, DeviceState } from '../../core/types';
-import { ago, duration, n, sigClass } from '../format';
+import { accessPoints, chainDevices, goodShare, probeHealth, shareHealth } from '../derive';
+import { duration, n } from '../format';
 import { AlertList } from './Alerts';
-import { Pill } from './Pill';
+import { Icon } from './Icon';
+import { HEALTH_LABEL, StatusIcon, worst, type Health } from './Pill';
+
+type Page = 'devices' | 'clients' | 'alerts';
 
 interface Props {
   s: AppState;
   open: (id: string) => void;
-  goto: (tab: 'aps' | 'alerts') => void;
+  goto: (p: Page) => void;
+  latencyLimit: number;
 }
 
-export function Overview({ s, open, goto }: Props) {
-  const byId = new Map(s.devices.map((d) => [d.cfg.id, d]));
-  const chain = s.chain.map((id) => byId.get(id)).filter((d): d is DeviceState => !!d && d.cfg.enabled);
-  const aps = s.devices.filter((d) => d.cfg.enabled && (d.role === 'ap' || (d.role === 'unknown' && !s.chain.includes(d.cfg.id))));
+export function Overview({ s, open, goto, latencyLimit }: Props) {
+  const chain = chainDevices(s);
+  const aps = accessPoints(s);
   const internet = s.probes.find((p) => p.probe.id === 'internet') ?? s.probes[0];
   const end = chain[chain.length - 1];
 
-  const backboneWorst = worst(chain.map((d) => d.health));
-  const apIssues = aps.filter((a) => a.health !== 'good' && a.health !== 'unknown').length;
-  const weakTotal = aps.reduce((a, d) => a + (d.latest?.stations?.weak ?? 0), 0);
-  const clientTotal = aps.reduce((a, d) => a + (d.latest?.stations?.count ?? 0), 0);
+  const backboneH = worst(chain.map((d) => d.health));
+  const weak = aps.reduce((a, d) => a + (d.latest?.stations?.weak ?? 0), 0);
+  const clients = aps.reduce((a, d) => a + (d.latest?.stations?.count ?? 0), 0);
+  const enabled = s.devices.filter((d) => d.cfg.enabled);
+  const online = enabled.filter((d) => (d.latest?.ping.received ?? 0) > 0).length;
+  const dayAgo = s.now - 86400000;
+  const restarts = s.events.filter((e) => e.event && e.key.split(':')[1] === 'reboot' && e.startedAt >= dayAgo).length;
+  const netH = probeHealth(internet?.latest?.ping);
+
+  const apRows = [...aps].sort((a, b) => (b.latest?.stations?.weak ?? 0) - (a.latest?.stations?.weak ?? 0));
 
   return (
     <>
       <div className="tiles">
-        <div className="card tile">
-          <div className="label">
-            Backbone <Pill h={backboneWorst} />
-          </div>
-          <div className="big">
-            {n(end?.latest?.ping.avg, '', 0)}
-            <small>ms to {end?.cfg.site ?? 'end'}</small>
-          </div>
-          <div className="foot">
-            worst {n(end?.latest?.ping.max, ' ms')} · loss {n(end?.latest?.ping.lossPct, '%')}
-          </div>
-        </div>
-        <div className="card tile">
-          <div className="label">
-            Internet <Pill h={probeHealth(internet?.latest?.ping)} />
-          </div>
-          <div className="big">
-            {n(internet?.latest?.ping.avg, '', 0)}
-            <small>ms</small>
-          </div>
-          <div className="foot">from this PC · loss {n(internet?.latest?.ping.lossPct, '%')}</div>
-        </div>
-        <div className="card tile" style={{ cursor: 'pointer' }} onClick={() => goto('aps')}>
-          <div className="label">
-            Customer devices <Pill h={weakTotal > clientTotal / 3 ? 'warning' : clientTotal ? 'good' : 'unknown'} label={`${aps.length} APs`} />
-          </div>
-          <div className="big">
-            {clientTotal}
-            <small>connected</small>
-          </div>
-          <div className="foot">
-            {weakTotal} on a weak signal · {apIssues} AP{apIssues === 1 ? '' : 's'} with issues
-          </div>
-        </div>
-        <div className="card tile" style={{ cursor: 'pointer' }} onClick={() => goto('alerts')}>
-          <div className="label">
-            Active alerts <Pill h={worst(s.alerts.map((a) => a.severity))} label={s.alerts.length ? `${s.alerts.length}` : 'None'} />
-          </div>
-          <div className="big">{s.alerts.length}</div>
-          <div className="foot">last poll {ago(s.lastPoll, s.now)}</div>
-        </div>
+        <Tile
+          label="Backbone latency"
+          h={backboneH}
+          big={n(end?.latest?.ping.avg, '', 0)}
+          small={`ms to ${end?.cfg.site || 'end'}`}
+          foot={`worst ${n(end?.latest?.ping.max, ' ms')} · loss ${n(end?.latest?.ping.lossPct, '%')}`}
+        />
+        <Tile
+          label="Internet"
+          h={netH}
+          status={netH === 'good' ? 'Online' : netH === 'critical' ? 'Offline' : undefined}
+          big={n(internet?.latest?.ping.avg, '', 0)}
+          small="ms"
+          foot={`${internet?.probe.host ?? ''} from this PC · loss ${n(internet?.latest?.ping.lossPct, '%')}`}
+        />
+        <Tile
+          label="Clients"
+          h={!clients ? 'unknown' : weak > clients / 3 ? 'warning' : 'good'}
+          status={weak ? `${weak} weak` : clients ? 'All strong' : undefined}
+          big={String(clients)}
+          small={`on ${aps.length} APs`}
+          onClick={() => goto('clients')}
+          extra={
+            <div className="split" role="img" aria-label={`${clients - weak} on a good signal, ${weak} weak`}>
+              <span style={{ width: `${clients ? ((clients - weak) / clients) * 100 : 0}%`, background: 'var(--accent)' }} />
+              <span style={{ width: `${clients ? (weak / clients) * 100 : 0}%`, background: 'var(--warning)' }} />
+            </div>
+          }
+        />
+        <Tile
+          label="Radios"
+          h={!enabled.length ? 'unknown' : online === enabled.length ? 'good' : online === 0 ? 'critical' : 'serious'}
+          status={`${online} online`}
+          big={String(online)}
+          small={`/ ${enabled.length}`}
+          foot={restarts ? `${restarts} restart${restarts === 1 ? '' : 's'} in the last 24 h` : 'No restarts in the last 24 h'}
+          onClick={() => goto('devices')}
+        />
       </div>
 
-      <div className="card">
+      <section className="card">
         <div className="card-h">
           <h2>Backbone</h2>
-          <span className="sub">House to Monks Meadow. Ping is from this PC, so each hop adds to the one before.</span>
+          <span className="sub">Ping from this PC; the figure over each link is the delay that hop adds.</span>
         </div>
-        <div className="card-b spine">
-          {s.probes
-            .filter((p) => p.probe.id !== 'internet')
-            .map((p) => (
-              <div key={p.probe.id}>
-                <div className="node" style={{ cursor: 'default' }}>
-                  <span className={`dot ${probeHealth(p.latest?.ping)}`} />
-                  <div className="nm">
-                    {p.probe.name}
-                    <small className="mono">{p.probe.host}</small>
-                  </div>
-                  <KV k="Ping" v={n(p.latest?.ping.avg, ' ms')} />
-                  <KV k="Worst" v={n(p.latest?.ping.max, ' ms')} />
-                  <KV k="Loss" v={n(p.latest?.ping.lossPct, '%')} cls="hide-sm" />
-                  <span className="hide-sm" />
-                </div>
-                <Link wireless={false} text="cable" />
-              </div>
-            ))}
-          {chain.map((d, i) => {
-            const next = chain[i + 1];
-            const wireless = next ? isWireless(d, next, i) : false;
-            const prevAvg = i > 0 ? chain[i - 1].latest?.ping.avg : null;
-            return (
-              <div key={d.cfg.id}>
-                <Node d={d} open={open} added={d.latest?.ping.avg != null && prevAvg != null ? d.latest.ping.avg - prevAvg : null} />
-                {next && (wireless ? <WirelessLink from={d} to={next} /> : <Link wireless={false} text={`cable at ${d.cfg.site}`} />)}
-              </div>
-            );
-          })}
-          {!chain.length && <div className="empty">No backbone radios in the chain. Set the order in Settings.</div>}
-        </div>
-      </div>
+        <Topology s={s} chain={chain} open={open} latencyLimit={latencyLimit} />
+      </section>
 
-      <div className="card">
-        <div className="card-h">
-          <h2>Active alerts</h2>
-        </div>
-        <div className="card-b">
-          <AlertList items={s.alerts} now={s.now} open={open} empty="Nothing wrong right now." />
-        </div>
-      </div>
+      <div className="row2">
+        <section className="card" style={{ flex: '2 1 560px' }}>
+          <div className="card-h">
+            <h2>Access points</h2>
+            <span className="sub">sorted by weak clients</span>
+            <span className="spacer" />
+            <button className="linkbtn" onClick={() => goto('devices')}>
+              View all devices
+            </button>
+          </div>
+          <div className="tbl-wrap">
+            <table style={{ minWidth: 620 }}>
+              <thead>
+                <tr>
+                  <th>Name</th>
+                  <th>Channel</th>
+                  <th>Noise</th>
+                  <th>Clients</th>
+                  <th style={{ width: 200 }}>Good signal</th>
+                  <th className="r">Uptime</th>
+                </tr>
+              </thead>
+              <tbody>
+                {apRows.map((d) => {
+                  const r = d.latest?.radio;
+                  const st = d.latest?.stations;
+                  const g = goodShare(d);
+                  const gh = shareHealth(g);
+                  const noisy = r?.noise != null && r.noise > -80;
+                  return (
+                    <tr key={d.cfg.id} className="click" onClick={() => open(d.cfg.id)}>
+                      <td>
+                        <span className="namecell">
+                          <span className={`sdot ${d.health}`} title={HEALTH_LABEL[d.health]} />
+                          <b>{d.cfg.name}</b>
+                        </span>
+                      </td>
+                      <td className="dim">{r?.channel ?? '–'}</td>
+                      <td className={`mono ${noisy ? 'weak' : 'dim'}`}>{n(r?.noise, ' dBm')}</td>
+                      <td>
+                        {st?.count ?? '–'} {!!st?.weak && <span className="warnv">({st.weak} weak)</span>}
+                      </td>
+                      <td>
+                        <span className="meter">
+                          <span className="trk">
+                            <span style={{ width: `${g ?? 0}%`, background: gh === 'good' ? 'var(--accent)' : `var(--${gh === 'unknown' ? 'track' : gh})` }} />
+                          </span>
+                          <span className="v">{g === null ? '–' : `${g}%`}</span>
+                        </span>
+                      </td>
+                      <td className="r dim">{duration(r?.uptime)}</td>
+                    </tr>
+                  );
+                })}
+              </tbody>
+            </table>
+            {!aps.length && <div className="empty">No access points found yet. Use Discover radios in Settings.</div>}
+          </div>
+        </section>
 
-      <div className="card">
-        <div className="card-h">
-          <h2>Access points</h2>
-          <span className="sub">Devices weaker than -75 dBm usually can't upload.</span>
-        </div>
-        <div className="card-b apgrid">
-          {aps.map((a) => (
-            <ApCard key={a.cfg.id} d={a} open={open} />
-          ))}
-          {!aps.length && <div className="empty">No access points found yet.</div>}
-        </div>
+        <section className="card" style={{ flex: '1 1 340px' }}>
+          <div className="card-h">
+            <h2>Alerts</h2>
+            <span className="spacer" />
+            <button className="linkbtn" onClick={() => goto('alerts')}>
+              History
+            </button>
+          </div>
+          <AlertList items={s.alerts.length ? s.alerts : s.events} limit={6} now={s.now} open={open} empty="Nothing to report." />
+        </section>
       </div>
     </>
   );
 }
 
-function KV({ k, v, cls }: { k: string; v: React.ReactNode; cls?: string }) {
-  return (
-    <div className={`kv ${cls ?? ''}`}>
-      <div className="k">{k}</div>
-      <div className="v">{v}</div>
-    </div>
-  );
-}
-
-function Node({ d, open, added }: { d: DeviceState; open: (id: string) => void; added: number | null }) {
-  const p = d.latest?.ping;
-  const r = d.latest?.radio;
-  return (
-    <div className="node" onClick={() => open(d.cfg.id)} title="Open details">
-      <span className={`dot ${d.health}`} />
-      <div className="nm">
-        {d.cfg.name}
-        <small>
-          {d.cfg.site} · <span className="mono">{d.cfg.ip}</span>
-        </small>
+function Tile(p: { label: string; h: Health; status?: string; big: string; small: string; foot?: string; extra?: React.ReactNode; onClick?: () => void }) {
+  const body = (
+    <>
+      <div className="label">
+        {p.label}
+        <span className={`st ink-${p.h}`}>
+          <StatusIcon h={p.h} size={11} />
+          {p.status ?? HEALTH_LABEL[p.h]}
+        </span>
       </div>
-      <KV k="Ping (worst)" v={`${n(p?.avg, '')} (${n(p?.max, '')}) ms`} />
-      <KV k="Added by hop" v={added === null ? '–' : added < 2 ? '~0 ms' : `+${added.toFixed(0)} ms`} />
-      <KV k="Loss" v={n(p?.lossPct, '%')} cls="hide-sm" />
-      <KV k="Up" v={r ? duration(r.uptime) : d.latest?.error ? <span className="weak">no login</span> : '–'} cls="hide-sm" />
-    </div>
-  );
-}
-
-function Link({ wireless, text }: { wireless: boolean; text: string }) {
-  return (
-    <div className={`link ${wireless ? 'wireless' : ''}`}>
-      <div className="rail">
-        <i />
+      <div className="big">
+        {p.big}
+        <small>{p.small}</small>
       </div>
-      <div className="info">{text}</div>
+      {p.foot && <div className="foot">{p.foot}</div>}
+      {p.extra}
+    </>
+  );
+  return p.onClick ? (
+    <button className="card tile" onClick={p.onClick}>
+      {body}
+    </button>
+  ) : (
+    <div className="card tile">{body}</div>
+  );
+}
+
+/** Consecutive chain radios at the same site share one node (station + sender on one mast). */
+function groupBySite(chain: DeviceState[]) {
+  const groups: DeviceState[][] = [];
+  for (const d of chain) {
+    const g = groups[groups.length - 1];
+    if (g && g[0].cfg.site && g[0].cfg.site === d.cfg.site) g.push(d);
+    else groups.push([d]);
+  }
+  return groups;
+}
+
+function Topology({ s, chain, open, latencyLimit }: { s: AppState; chain: DeviceState[]; open: (id: string) => void; latencyLimit: number }) {
+  const groups = groupBySite(chain);
+  const routers = s.probes.filter((p) => p.probe.id !== 'internet');
+  if (!chain.length) return <div className="empty">No backbone radios in the chain. Set the order in Settings.</div>;
+  return (
+    <div className="topo-scroll">
+      <div className="topo">
+        {routers.map((p) => {
+          const h = probeHealth(p.latest?.ping);
+          return [
+            <div className="tnode" key={p.probe.id}>
+              <div className="box router">
+                <Icon name="router" size={30} stroke={1.7} />
+                {h !== 'good' && (
+                  <span className={`badge ${h}`}>
+                    <StatusIcon h={h} size={10} />
+                  </span>
+                )}
+              </div>
+              <div className="nm">{p.probe.name}</div>
+              <div className="ips">
+                <span className="ip">{p.probe.host}</span>
+              </div>
+              <div className={`lat ink-${h === 'good' ? 'unknown' : h}`}>{n(p.latest?.ping.avg, ' ms')}</div>
+            </div>,
+            <div className="tlink" key={p.probe.id + '-l'}>
+              <span className="add" />
+              <div className="line" />
+              <span className="meta">cable</span>
+            </div>,
+          ];
+        })}
+        {groups.map((g, gi) => {
+          const h = worst(g.map((d) => d.health));
+          const last = g[g.length - 1];
+          const next = groups[gi + 1];
+          return [
+            <div className="tnode" key={g[0].cfg.id}>
+              <div className={`box ${h}`} role="button" tabIndex={0} title={`Open ${last.cfg.name}`} onClick={() => open(last.cfg.id)} onKeyDown={(e) => e.key === 'Enter' && open(last.cfg.id)}>
+                <Icon name="radio" size={28} stroke={1.6} />
+                <span className={`badge ${h}`} aria-label={HEALTH_LABEL[h]}>
+                  <StatusIcon h={h} size={10} />
+                </span>
+              </div>
+              <div className="nm">{g[0].cfg.site || g[0].cfg.name}</div>
+              <div className="ips">
+                {g.map((d) => (
+                  <button key={d.cfg.id} className="ip" title={d.cfg.name} onClick={() => open(d.cfg.id)}>
+                    .{d.cfg.ip.split('.').slice(-2).join('.')}
+                  </button>
+                ))}
+              </div>
+              <div className={`lat ${(last.latest?.ping.avg ?? 0) > latencyLimit ? 'ink-critical' : ''}`}>{n(last.latest?.ping.avg, ' ms')}</div>
+            </div>,
+            next && <Hop key={g[0].cfg.id + '-l'} from={last} to={next[0]} />,
+          ];
+        })}
+      </div>
     </div>
   );
 }
 
-function WirelessLink({ from, to }: { from: DeviceState; to: DeviceState }) {
-  // the receiving station reports the link's signal, rates and airMAX figures
+function Hop({ from, to }: { from: DeviceState; to: DeviceState }) {
+  const added = from.latest?.ping.avg != null && to.latest?.ping.avg != null ? to.latest.ping.avg - from.latest.ping.avg : null;
+  // the receiving station reports the link's signal and airMAX figures; the sender its channel
   const r = to.latest?.radio;
   const a = from.role === 'backbone-ap' ? from.latest?.radio : undefined;
   const cap = r?.airmaxCapacity ?? null;
-  const ccq = r?.ccq ?? a?.ccq ?? null;
-  const rate = r ? `${n(r.txRate)}/${n(r.rxRate)}` : '–';
-  const rateLow = r && ((r.txRate ?? 999) < 100 || (r.rxRate ?? 999) < 100);
+  const cls = added === null ? '' : added >= 20 ? 'bad' : added >= 8 ? 'mid' : 'ok';
   return (
-    <div className="link wireless">
-      <div className="rail">
-        <i />
-      </div>
-      <div className="info">
-        <span>
-          radio <b>{n(r?.frequency ?? a?.frequency, ' MHz')}</b>
-        </span>
-        <span>
-          signal <b className={sigClass(r?.signal, -70) === 'critical' ? 'bad' : ''}>{n(r?.signal, ' dBm')}</b>
-        </span>
-        <span>
-          noise <b>{n(r?.noise, ' dBm')}</b>
-          {a && <> (sender {n(a.noise, ' dBm')})</>}
-        </span>
-        <span>
-          CCQ <b className={ccq !== null && ccq < 90 ? 'warn' : ''}>{n(ccq, '%', 1)}</b>
-        </span>
-        <span>
-          capacity <b className={cap !== null && cap < 80 ? 'warn' : ''}>{n(cap, '%')}</b>
-        </span>
-        <span>
-          rate <b className={rateLow ? 'warn' : ''}>{rate} Mbps</b>
-        </span>
-      </div>
+    <div className={`tlink air ${cls === 'bad' ? 'bad' : ''}`}>
+      <span className={`add ${cls}`}>{added === null ? '–' : added < 2 ? '~0 ms' : `+${added.toFixed(0)} ms`}</span>
+      <div className="line" />
+      <span className="meta">
+        {n(r?.frequency ?? a?.frequency, ' MHz')} · {n(r?.signal, ' dBm')} · <span className={cap !== null && cap < 80 ? 'w' : ''}>{n(cap, '%')}</span>
+      </span>
     </div>
   );
-}
-
-export function ApCard({ d, open }: { d: DeviceState; open: (id: string) => void }) {
-  const st = d.latest?.stations;
-  const r = d.latest?.radio;
-  return (
-    <div className="card ap" onClick={() => open(d.cfg.id)}>
-      <div className="row">
-        <b>{d.cfg.name}</b>
-        <Pill h={d.health} />
-      </div>
-      <div className="faint" style={{ fontSize: 12 }}>
-        {d.cfg.site} · ch {n(r?.channel)} · {n(r?.txPower, ' dBm')}
-      </div>
-      <div className="meta">
-        <div className="kv">
-          <div className="k">Devices</div>
-          <div className="v">{st?.count ?? '–'}</div>
-        </div>
-        <div className="kv">
-          <div className="k">Weak</div>
-          <div className={`v ${st?.weak ? 'weak' : ''}`}>{st?.weak ?? '–'}</div>
-        </div>
-        <div className="kv">
-          <div className="k">Noise</div>
-          <div className="v">{n(r?.noise)}</div>
-        </div>
-      </div>
-    </div>
-  );
-}
-
-function isWireless(a: DeviceState, b: DeviceState, i: number) {
-  if (a.role === 'backbone-ap' && b.role === 'backbone-sta') return true;
-  if (a.role === 'backbone-sta' && b.role === 'backbone-ap') return false;
-  if (a.cfg.site !== b.cfg.site) return true;
-  return i % 2 === 0;
-}
-
-type H = 'good' | 'warning' | 'serious' | 'critical' | 'unknown';
-export function worst(hs: H[]): H {
-  const rank: Record<H, number> = { unknown: -1, good: 0, warning: 1, serious: 2, critical: 3 };
-  let w: H = hs.length ? 'good' : 'unknown';
-  for (const h of hs) if (rank[h] > rank[w]) w = h;
-  return w;
-}
-
-function probeHealth(p?: { received: number; lossPct: number; avg: number | null }): H {
-  if (!p) return 'unknown';
-  if (p.received === 0) return 'critical';
-  if (p.lossPct > 40) return 'serious';
-  if (p.lossPct > 20 || (p.avg ?? 0) > 60) return 'warning';
-  return 'good';
 }

@@ -1,9 +1,10 @@
 import { useEffect, useState } from 'react';
 import type { AppState, DeviceCfg, PublicConfig, Role } from '../../core/types';
 import { api } from '../api';
+import type { Theme } from '../derive';
 import { roleLabel } from '../format';
 
-export function Settings({ s, toast, onSaved }: { s: AppState; toast: (m: string) => void; onSaved: () => void }) {
+export function Settings({ s, toast, onSaved, theme, setTheme }: { s: AppState; toast: (m: string) => void; onSaved: () => void; theme: Theme; setTheme: (t: Theme) => void }) {
   const [c, setC] = useState<PublicConfig | null>(null);
   const [password, setPassword] = useState('');
   const [busy, setBusy] = useState('');
@@ -69,7 +70,7 @@ export function Settings({ s, toast, onSaved }: { s: AppState; toast: (m: string
 
   return (
     <>
-      <div className="row-actions" style={{ position: 'sticky', top: 56, zIndex: 5 }}>
+      <div className="row-actions savebar">
         <button className="btn primary" onClick={save} disabled={!!busy}>
           {busy === 'save' ? 'Saving…' : 'Save settings'}
         </button>
@@ -108,7 +109,7 @@ export function Settings({ s, toast, onSaved }: { s: AppState; toast: (m: string
             Add
           </button>
         </div>
-        <div className="card-b tbl-wrap">
+        <div className="tbl-wrap">
           <table>
             <thead>
               <tr>
@@ -215,7 +216,7 @@ export function Settings({ s, toast, onSaved }: { s: AppState; toast: (m: string
             Add
           </button>
         </div>
-        <div className="card-b tbl-wrap">
+        <div className="tbl-wrap">
           <table>
             <thead>
               <tr>
@@ -264,6 +265,28 @@ export function Settings({ s, toast, onSaved }: { s: AppState; toast: (m: string
           <label className="chk">
             <input type="checkbox" checked={c.notifications} onChange={(e) => set('notifications', e.target.checked)} /> Windows notifications for alerts
           </label>
+        </div>
+      </div>
+
+      <div className="card">
+        <div className="card-h">
+          <h2>Appearance</h2>
+          <span className="sub">Saved on this PC. The moon/sun button in the header switches it too.</span>
+        </div>
+        <div className="card-b row-actions">
+          <div className="seg" role="group" aria-label="Theme">
+            {(
+              [
+                ['system', 'Follow Windows'],
+                ['light', 'Light'],
+                ['dark', 'Dark'],
+              ] as [Theme, string][]
+            ).map(([k, l]) => (
+              <button key={k} className={theme === k ? 'on' : ''} onClick={() => setTheme(k)}>
+                {l}
+              </button>
+            ))}
+          </div>
         </div>
       </div>
 

@@ -22,7 +22,7 @@ export function duration(sec: number | null | undefined) {
 }
 
 export const clock = (t: number) =>
-  new Date(t).toLocaleString(undefined, { weekday: 'short', hour: '2-digit', minute: '2-digit' });
+  new Date(t).toLocaleString('en-GB', { weekday: 'short', hour: '2-digit', minute: '2-digit' }).replace(',', '');
 
 /** Signal quality bucket used everywhere a dBm number is shown. */
 export function sigClass(dbm: number | null | undefined, weak = -75): 'good' | 'warning' | 'critical' | 'unknown' {

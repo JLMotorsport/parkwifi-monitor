@@ -18,13 +18,15 @@ interface Props {
   digits?: number;
   /** extra line for the tooltip, e.g. worst ping in the sample */
   extra?: (i: number) => string | null;
+  height?: number;
 }
 
-const H = 150;
 const PAD = { l: 40, r: 10, t: 10, b: 22 };
 
 /** Single-series line chart: one axis, recessive grid, crosshair + tooltip, gaps where data is missing. */
-export function LineChart({ title, unit, data, hours, threshold, min, max, digits = 0, extra }: Props) {
+export function LineChart({ title, unit, data: raw, hours, threshold, min, max, digits = 0, extra, height = 140 }: Props) {
+  const H = height;
+  const data = useMemo(() => [...raw].sort((a, b) => a.t - b.t), [raw]);
   const ref = useRef<HTMLDivElement>(null);
   const [w, setW] = useState(400);
   const [hover, setHover] = useState<number | null>(null);
@@ -99,15 +101,14 @@ export function LineChart({ title, unit, data, hours, threshold, min, max, digit
   const latest = [...data].reverse().find((p) => p.v !== null);
 
   return (
-    <div className="card">
-      <div className="card-h">
-        <h2>{title}</h2>
-        <span className="sub num">
-          {latest ? `now ${latest.v!.toFixed(digits)} ${unit}` : 'no data yet'}
-          {threshold !== undefined ? ` · limit ${threshold} ${unit}` : ''}
+    <div className="cblock">
+      <div className="ch">
+        <span className="t">{title}</span>
+        {threshold !== undefined && <span className="sub num">limit {threshold} {unit}</span>}
+        <span className={`now ${latest && threshold !== undefined && breach(latest.v!, threshold, unit) ? 'weak' : ''}`}>
+          {latest ? `${latest.v!.toFixed(digits)} ${unit}` : 'no data'}
         </span>
       </div>
-      <div className="card-b">
         <div className="chart" ref={ref}>
           <svg
             viewBox={`0 0 ${w} ${H}`}
@@ -168,9 +169,13 @@ export function LineChart({ title, unit, data, hours, threshold, min, max, digit
             </div>
           )}
         </div>
-      </div>
     </div>
   );
+}
+
+/** Ping/noise style limits are ceilings; capacity/CCQ (in %) are floors. */
+function breach(v: number, limit: number, unit: string) {
+  return unit === '%' ? v < limit : v > limit;
 }
 
 /** Round the y-domain out to 1/2/5 x 10^n steps so tick labels are clean numbers. */

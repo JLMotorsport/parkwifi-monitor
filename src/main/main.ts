@@ -1,4 +1,4 @@
-import { app, BrowserWindow, Menu, Notification, Tray, nativeImage, safeStorage, shell } from 'electron';
+import { app, BrowserWindow, Menu, Notification, Tray, nativeImage, nativeTheme, safeStorage, shell } from 'electron';
 import { autoUpdater } from 'electron-updater';
 import path from 'path';
 import { Monitor } from '../core/monitor';
@@ -51,6 +51,7 @@ function showWindow() {
     title: 'Park WiFi Monitor',
     icon: icon('icon.png'),
     autoHideMenuBar: true,
+    backgroundColor: nativeTheme.shouldUseDarkColors ? '#0f1115' : '#f3f4f6',
     show: false,
     webPreferences: { contextIsolation: true, nodeIntegration: false },
   });
