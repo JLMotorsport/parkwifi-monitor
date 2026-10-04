@@ -2,6 +2,7 @@
 // without the real network. Needs a cert pair in scripts/mock-cert (see README).
 //   node scripts/mock-radios.mjs
 import https from 'https';
+import http from 'http';
 import fs from 'fs';
 import path from 'path';
 import { fileURLToPath } from 'url';
@@ -24,6 +25,8 @@ const radios = {
     sta: [['60:02:B4:B8:32:A9', '192.168.2.68', -85, 130, 2, 40, 1], ['16:CC:EA:7B:76:87', '192.168.2.191', -66, 52, 39, 71, 3]] },
   '127.0.0.37': { host: 'Lookout AP#7 (73L)', model: 'NanoStation M2', mode: 'ap', wds: 0, freq: 2457, ch: 10, noise: -84, ccq: 624, up: 600, txpower: 20,
     sta: [['60:02:B4:46:FB:5A', '192.168.2.205', -58, 117, 52, 92, 5], ['9A:0E:4E:5B:84:E5', '192.168.2.150', -75, 26, 19.5, 52, 209], ['AA:42:A1:05:28:4C', '192.168.2.218', -74, 78, 6.5, 25, 31]] },
+  '127.0.0.35': { host: 'Lookout AP#5 (http only)', model: 'NanoStation M2', mode: 'ap', wds: 0, freq: 2412, ch: 1, noise: -88, ccq: 880, up: 300000, txpower: 17, httpOnly: true,
+    sta: [['AA:BB:CC:00:11:22', '192.168.2.120', -62, 65, 52, 90, 2]] },
   '127.0.0.42': { host: 'Monks AP#4 (MM)', model: 'NanoBeam M2', mode: 'ap', wds: 0, freq: 2457, ch: 10, noise: -89, ccq: 940, up: 790000, txpower: 20,
     sta: [['3A:57:9D:9C:14:74', '192.168.2.88', -64, 26, 78, 93, 3]] },
 };
@@ -32,6 +35,7 @@ const radios = {
 // and the session only becomes usable after /index.cgi has been loaded once.
 const pending = new Set();
 const sessions = new Set();
+const tests = new Map(); // ticket -> { started, duration, port }
 const jitter = (v, a) => (v === undefined ? undefined : Math.round((v + (Math.random() - 0.5) * a) * 10) / 10);
 const cookie = (req) => (req.headers.cookie ?? '').match(/AIROS_[0-9A-F]{12}=([0-9a-f]+)/)?.[1];
 
@@ -50,9 +54,9 @@ function status(r) {
 }
 
 for (const [ip, r] of Object.entries(radios)) {
+  const serve = (handler) => (r.httpOnly ? http.createServer(handler).listen(80, ip) : https.createServer(tls, handler).listen(443, ip, () => console.log('mock airOS', ip, r.host)));
   const mac = '0027226447' + ip.split('.')[3].padStart(2, '0');
-  https
-    .createServer(tls, (req, res) => {
+  serve((req, res) => {
       const sid = cookie(req);
       if (req.url.startsWith('/login.cgi')) {
         if (req.method === 'GET') {
@@ -86,6 +90,25 @@ for (const [ip, r] of Object.entries(radios)) {
       }
       res.writeHead(200, { 'Content-Type': 'application/json' });
       if (req.url.startsWith('/status.cgi')) return res.end(JSON.stringify(status(r)));
+      if (req.url.startsWith('/sptest_action.cgi')) {
+        // airOS speed test: fails (flags 2) when asked to log into the target on 443, like the real radios
+        const q = new URL(req.url, 'http://x').searchParams;
+        const t = q.get('ticket');
+        const a = q.get('action');
+        if (a === 'remote') return res.end('{ "status" : 0, "message" : "Success." }');
+        if (a === 'start') {
+          tests.set(t, { started: Date.now(), duration: Number(q.get('duration') ?? 30), port: q.get('port'), dir: q.get('direction') });
+          return res.end(JSON.stringify({ status: 0, message: 'Success.', session: Number(t), state: 1, flags: 0, duration: 0, tx: 2809.1, rx: 781.3, microtime: '0.3 1733404338' }));
+        }
+        if (a === 'status') {
+          const x = tests.get(t);
+          if (!x || x.port === '443') return res.end(JSON.stringify({ status: 0, message: 'Success.', session: Number(t), state: 10, flags: 2, duration: 10, tx: 0, rx: 0, microtime: '0.5 1733404344' }));
+          const done = Date.now() - x.started > Math.min(x.duration, 4) * 1000;
+          const tx = x.dir === 'rx' ? 0 : 38.42, rx = x.dir === 'tx' ? 0 : 61.07;
+          return res.end(JSON.stringify({ status: 0, message: 'Success.', session: Number(t), state: done ? 10 : 2, flags: 0, duration: 10, tx: done ? tx : 1000, rx: done ? rx : 1000, microtime: '0.5 1733404344' }));
+        }
+        return res.end('{ "status" : 0, "message" : "Success." }');
+      }
       if (req.url.startsWith('/sta.cgi')) {
         const list = (r.sta ?? []).map(([mac, lastip, signal, tx, rx, ccq, lat]) => ({
           mac, lastip, signal: Math.round(jitter(signal, 4)), tx, rx, ccq, txlatency: lat, uptime: 600 + Math.round((Date.now() - boot) / 1000), noisefloor: r.noise,
@@ -93,6 +116,5 @@ for (const [ip, r] of Object.entries(radios)) {
         return res.end(JSON.stringify(list));
       }
       res.end('{}');
-    })
-    .listen(443, ip, () => console.log('mock airOS', ip, r.host));
+  });
 }

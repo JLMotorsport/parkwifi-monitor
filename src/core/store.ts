@@ -1,6 +1,6 @@
 import fs from 'fs';
 import path from 'path';
-import type { AlertItem, Sample } from './types';
+import type { AlertItem, Sample, SpeedTestRecord } from './types';
 
 const DAY = 24 * 3600 * 1000;
 const MEMORY_HOURS = 48;
@@ -12,11 +12,13 @@ const MEMORY_HOURS = 48;
 export class HistoryStore {
   private dir: string;
   private alertsFile: string;
+  private speedFile: string;
   private mem = new Map<string, Sample[]>();
 
   constructor(dataDir: string, private retentionDays: number) {
     this.dir = path.join(dataDir, 'history');
     this.alertsFile = path.join(dataDir, 'alerts.jsonl');
+    this.speedFile = path.join(dataDir, 'speedtests.jsonl');
     fs.mkdirSync(this.dir, { recursive: true });
     this.loadRecent();
     this.prune();
@@ -101,6 +103,30 @@ export class HistoryStore {
         }
       }
       return out.slice(-limit).reverse();
+    } catch {
+      return [];
+    }
+  }
+
+  logSpeedTest(r: SpeedTestRecord) {
+    fs.appendFileSync(this.speedFile, JSON.stringify(r) + '\n');
+  }
+
+  speedTests(deviceId?: string, limit = 50): SpeedTestRecord[] {
+    try {
+      const rows = fs
+        .readFileSync(this.speedFile, 'utf8')
+        .trim()
+        .split('\n')
+        .map((l) => {
+          try {
+            return JSON.parse(l) as SpeedTestRecord;
+          } catch {
+            return null;
+          }
+        })
+        .filter((r): r is SpeedTestRecord => !!r && (!deviceId || r.fromId === deviceId || r.toId === deviceId));
+      return rows.slice(-limit).reverse();
     } catch {
       return [];
     }

@@ -4,7 +4,7 @@ import { AlertEngine, roleOf } from './alerts';
 import { ConfigStore, SecretBox, slug } from './config';
 import { ping } from './ping';
 import { HistoryStore } from './store';
-import type { AlertItem, AppState, DeviceCfg, DeviceState, Sample, Station, UpdateInfo } from './types';
+import type { AlertItem, AppState, DeviceCfg, DeviceState, Sample, SpeedTestRecord, Station, UpdateInfo } from './types';
 
 async function pool<T, R>(items: T[], limit: number, fn: (t: T) => Promise<R>): Promise<R[]> {
   const out: R[] = new Array(items.length);
@@ -39,6 +39,7 @@ export class Monitor extends EventEmitter {
   lastPoll: number | null = null;
   nextPoll: number | null = null;
   polling = false;
+  speedTestRunning: string | null = null;
 
   constructor(dataDir: string, box: SecretBox, readonly version: string, public hooks: MonitorHooks = {}) {
     super();
@@ -190,7 +191,50 @@ export class Monitor extends EventEmitter {
       update: this.hooks.update?.() ?? { status: 'unsupported' },
       autostart: this.hooks.autostart?.() ?? null,
       needsSetup: !this.cfg.password(),
+      speedTestRunning: this.speedTestRunning,
     };
+  }
+
+  /**
+   * Runs airOS's own speed test from one radio to another. One at a time: a test fills the
+   * links it crosses, so customers on them slow down while it runs.
+   */
+  async speedTest(fromId: string, toId: string, direction: 'dx' | 'tx' | 'rx', duration: number, port?: number): Promise<SpeedTestRecord> {
+    const c = this.cfg.config;
+    const from = c.devices.find((d) => d.id === fromId);
+    const to = c.devices.find((d) => d.id === toId);
+    if (!from || !to) throw new Error('Unknown radio');
+    if (this.speedTestRunning) throw new Error('A speed test is already running');
+    this.speedTestRunning = fromId;
+    this.emit('change');
+    const p = port ?? c.speedTestPort ?? 80;
+    const d = Math.min(60, Math.max(5, Math.round(duration) || 10));
+    const rec: SpeedTestRecord = {
+      t: Date.now(),
+      fromId,
+      fromName: from.name,
+      toId,
+      toName: to.name,
+      direction,
+      duration: d,
+      port: p,
+      ok: false,
+      tx: null,
+      rx: null,
+      message: '',
+    };
+    try {
+      const cl = new AirOSClient(from.ip, c.username, this.cfg.password(), 15000);
+      const r = await cl.speedTest({ target: to.ip, port: p, user: c.username, pass: this.cfg.password(), duration: d, direction });
+      Object.assign(rec, { ok: r.ok, tx: r.tx, rx: r.rx, message: r.message });
+    } catch (e) {
+      rec.message = (e as Error).message;
+    } finally {
+      this.speedTestRunning = null;
+      this.history.logSpeedTest(rec);
+      this.emit('change');
+    }
+    return rec;
   }
 
   rawFor(id: string) {

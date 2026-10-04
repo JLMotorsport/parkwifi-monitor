@@ -1,4 +1,5 @@
 import https from 'https';
+import http from 'http';
 import crypto from 'crypto';
 import type { RadioStatus, Station } from './types';
 
@@ -6,10 +7,11 @@ import type { RadioStatus, Station } from './types';
  * Minimal client for the airOS 6.x web UI (NanoStation / NanoBeam M-series).
  *
  * Flow, as the browser does it:
- *   1. pick a random 32-hex AIROS_SESSIONID cookie (the login page's JS does this)
- *   2. GET /login.cgi with that cookie, collect anything the radio sets
- *   3. POST /login.cgi (multipart: uri, username, password) -> 302 on success
+ *   1. GET /login.cgi, which sets the radio's AIROS_* session cookie
+ *   2. POST /login.cgi (urlencoded: username, password, uri) -> 302 on success
+ *   3. GET /index.cgi to activate the session
  *   4. GET /status.cgi and /sta.cgi -> JSON
+ * HTTPS is tried first; a radio with its secure web server switched off is reached over HTTP.
  * Radios use self-signed certificates, so certificate checks are off for these hosts only.
  */
 
@@ -20,6 +22,18 @@ interface Resp {
   headers: Record<string, string | string[] | undefined>;
   body: string;
 }
+
+export interface SpeedTestResult {
+  ok: boolean;
+  /** Mbps, from the testing radio to the target */
+  tx: number | null;
+  /** Mbps, from the target back to the testing radio */
+  rx: number | null;
+  message: string;
+  seconds?: number;
+}
+
+const round2 = (n: unknown) => (typeof n === 'number' && Number.isFinite(n) ? Math.round(n * 100) / 100 : null);
 
 export class AirOSError extends Error {
   constructor(message: string, readonly kind: 'auth' | 'network' | 'parse') {
@@ -32,6 +46,8 @@ export class AirOSClient {
   private loggedIn = false;
   /** step-by-step record of the last login, shown in errors so failures explain themselves */
   private trace: string[] = [];
+  /** false once we've found this radio only answers plain HTTP */
+  private secure = true;
 
   constructor(
     readonly ip: string,
@@ -45,15 +61,20 @@ export class AirOSClient {
     return [...this.cookies.entries()].map(([k, v]) => `${k}=${v}`).join('; ');
   }
 
+  private get origin() {
+    return this.secure ? (this.port === 443 ? `https://${this.ip}` : `https://${this.ip}:${this.port}`) : `http://${this.ip}`;
+  }
+
   private request(method: string, path: string, body?: Buffer, headers: Record<string, string> = {}): Promise<Resp> {
     return new Promise((resolve, reject) => {
-      const req = https.request(
+      const mod = this.secure ? https : http;
+      const req = mod.request(
         {
           host: this.ip,
-          port: this.port,
+          port: this.secure ? this.port : 80,
           path,
           method,
-          agent,
+          ...(this.secure ? { agent } : {}),
           timeout: this.timeoutMs,
           headers: {
             Cookie: this.cookieHeader(),
@@ -88,7 +109,21 @@ export class AirOSClient {
     // 1. The radio hands out its own session cookie (AIROS_SESSIONID or AIROS_<mac>) on the login page.
     this.cookies.clear();
     this.trace = [];
-    const g = await this.request('GET', '/login.cgi');
+    let g: Resp;
+    try {
+      g = await this.request('GET', '/login.cgi');
+    } catch (e) {
+      if (!this.secure) throw e;
+      // HTTPS refused: try plain HTTP before giving up
+      this.secure = false;
+      try {
+        g = await this.request('GET', '/login.cgi');
+      } catch {
+        this.secure = true;
+        throw e;
+      }
+    }
+    if (!this.secure) this.trace.push('using http');
     this.trace.push(`GET /login.cgi ${g.status} cookies[${[...this.cookies.keys()].join(',') || 'none'}]`);
     if (![...this.cookies.keys()].some((k) => k.startsWith('AIROS'))) {
       // older builds expect the browser to make one up
@@ -96,7 +131,7 @@ export class AirOSClient {
     }
 
     // 2. Post the form exactly as the browser does; success is a 302 redirect.
-    const origin = this.port === 443 ? `https://${this.ip}` : `https://${this.ip}:${this.port}`;
+    const origin = this.origin;
     const form = new URLSearchParams({ username: this.username, password: this.password, uri: '/index.cgi' }).toString();
     const r = await this.request('POST', '/login.cgi', Buffer.from(form, 'utf8'), {
       'Content-Type': 'application/x-www-form-urlencoded',
@@ -121,15 +156,15 @@ export class AirOSClient {
     this.loggedIn = true;
   }
 
-  private async getJSON<T>(path: string, retry = true): Promise<T> {
+  private async getJSON<T>(path: string, retry = true, headers: Record<string, string> = {}): Promise<T> {
     if (!this.loggedIn) await this.login();
-    const r = await this.request('GET', path);
+    const r = await this.request('GET', path, undefined, headers);
     const text = r.body.trim();
     const looksJson = text.startsWith('{') || text.startsWith('[');
     if (r.status === 302 || r.status === 401 || r.status === 403 || !looksJson) {
       if (retry) {
         this.loggedIn = false;
-        return this.getJSON<T>(path, false);
+        return this.getJSON<T>(path, false, headers);
       }
       throw new AirOSError(`${this.ip}: not logged in after retry (HTTP ${r.status} on ${path}). Login steps: ${this.trace.join('; ')}`, 'auth');
     }
@@ -137,6 +172,51 @@ export class AirOSClient {
       return JSON.parse(text) as T;
     } catch (e) {
       throw new AirOSError(`${this.ip}: bad JSON from ${path}`, 'parse');
+    }
+  }
+
+  /**
+   * airOS's built-in Network Speed Test, driven the way its sptest.js does it:
+   *   action=remote (log the test into the target radio) -> action=start -> poll action=status
+   *   until state 10 (finished). flags 0 = good result; any other flag = the test failed.
+   *   Final tx/rx are Mbps from this radio's point of view (tx = this radio to the target).
+   * The target radio is logged into over plain HTTP on `port`, which is why it fails when the
+   * target only serves HTTPS.
+   */
+  async speedTest(opts: { target: string; port: number; user: string; pass: string; duration: number; direction: 'dx' | 'tx' | 'rx' }): Promise<SpeedTestResult> {
+    if (!this.loggedIn) await this.login();
+    const ticket = Math.floor(Math.random() * 1000);
+    const sid = [...this.cookies.entries()].find(([k]) => k.startsWith('AIROS'))?.[1] ?? '';
+    const hdr = { Referer: `${this.origin}/sptest.cgi`, 'X-Requested-With': 'XMLHttpRequest' };
+    const q = (o: Record<string, string | number>) =>
+      '/sptest_action.cgi?' + new URLSearchParams({ ...Object.fromEntries(Object.entries(o).map(([k, v]) => [k, String(v)])), _: String(Date.now()) }).toString();
+    type R = { status: number; message?: string; state?: number; flags?: number; tx?: number; rx?: number };
+    const base = { ticket, target: opts.target, port: opts.port, login: opts.user, passwd: opts.pass };
+    const started = Date.now();
+    try {
+      const rem = await this.getJSON<R>(q({ ...base, action: 'remote', airosid: sid }), true, hdr);
+      if (rem.status !== 0) return { ok: false, tx: null, rx: null, message: `Couldn't reach the target: ${rem.message ?? 'error'}` };
+      const st = await this.getJSON<R>(q({ ...base, action: 'start', duration: opts.duration, direction: opts.direction }), true, hdr);
+      if (st.status !== 0) return { ok: false, tx: null, rx: null, message: `Test didn't start: ${st.message ?? 'error'}` };
+      const deadline = Date.now() + (opts.duration + 20) * 1000;
+      while (Date.now() < deadline) {
+        await new Promise((r) => setTimeout(r, 1500));
+        const s = await this.getJSON<R>(q({ ticket, action: 'status' }), true, hdr);
+        if (s.state === 10) {
+          if (s.flags === 0) return { ok: true, tx: round2(s.tx), rx: round2(s.rx), message: 'Completed', seconds: Math.round((Date.now() - started) / 1000) };
+          return {
+            ok: false,
+            tx: null,
+            rx: null,
+            message:
+              `The target radio didn't run the test (flags ${s.flags}). Usually the target's web server is HTTPS-only: ` +
+              `the test logs into it over plain HTTP on port ${opts.port}.`,
+          };
+        }
+      }
+      return { ok: false, tx: null, rx: null, message: 'Speed test timed out' };
+    } finally {
+      await this.getJSON(q({ ticket, action: 'stop' }), false, hdr).catch(() => undefined);
     }
   }
 

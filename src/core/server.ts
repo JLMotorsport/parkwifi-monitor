@@ -102,7 +102,7 @@ export function startServer(m: Monitor, uiDir: string, actions: AppActions = {})
           case 'PUT /api/config': {
             const body = (await readBody(req)) as Partial<Config> & { password?: string };
             const c = m.cfg.config;
-            const allowed: (keyof Config)[] = ['username', 'pollSeconds', 'pingCount', 'pingSize', 'devices', 'probes', 'chain', 'thresholds', 'notifications', 'retentionDays', 'server'];
+            const allowed: (keyof Config)[] = ['username', 'speedTestPort', 'pollSeconds', 'pingCount', 'pingSize', 'devices', 'probes', 'chain', 'thresholds', 'notifications', 'retentionDays', 'server'];
             for (const k of allowed) if (body[k] !== undefined) (c as unknown as Record<string, unknown>)[k] = body[k];
             if (typeof body.password === 'string' && body.password.length) m.cfg.setPassword(body.password);
             c.pollSeconds = Math.max(15, Number(c.pollSeconds) || 60);
@@ -110,6 +110,22 @@ export function startServer(m: Monitor, uiDir: string, actions: AppActions = {})
             m.cfg.save();
             m.configChanged();
             return send(200, publicConfig(m));
+          }
+          case 'GET /api/speedtests':
+            return send(200, m.history.speedTests(url.searchParams.get('id') ?? undefined));
+          case 'POST /api/speedtest': {
+            const b = (await readBody(req)) as { from?: string; to?: string; direction?: 'dx' | 'tx' | 'rx'; duration?: number; port?: number };
+            if (!b.from || !b.to) return send(400, { error: 'from and to are required' });
+            const dir = b.direction === 'tx' || b.direction === 'rx' ? b.direction : 'dx';
+            if (b.port) {
+              m.cfg.config.speedTestPort = Number(b.port);
+              m.cfg.save();
+            }
+            try {
+              return send(200, await m.speedTest(b.from, b.to, dir, Number(b.duration ?? 10), b.port ? Number(b.port) : undefined));
+            } catch (e) {
+              return send(409, { error: (e as Error).message });
+            }
           }
           case 'POST /api/poll':
             void m.pollNow();

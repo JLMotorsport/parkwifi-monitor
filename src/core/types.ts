@@ -50,6 +50,8 @@ export interface Config {
   notifications: boolean;
   retentionDays: number;
   server: { port: number; allowRemote: boolean; token: string };
+  /** web port the airOS speed test uses to log into the target radio (it uses plain HTTP) */
+  speedTestPort?: number;
   /** set once the app has switched "Start with Windows" on for the first time */
   autostartInitialised?: boolean;
 }
@@ -157,8 +159,27 @@ export interface AppState {
   update: UpdateInfo;
   autostart: boolean | null;
   needsSetup: boolean;
+  /** device id currently running a speed test, if any */
+  speedTestRunning: string | null;
 }
 
 export interface PublicConfig extends Omit<Config, 'passwordEnc'> {
   hasPassword: boolean;
+}
+
+export interface SpeedTestRecord {
+  t: number;
+  fromId: string;
+  fromName: string;
+  toId: string;
+  toName: string;
+  direction: 'dx' | 'tx' | 'rx';
+  duration: number;
+  port: number;
+  ok: boolean;
+  /** Mbps from the testing radio towards the target */
+  tx: number | null;
+  /** Mbps from the target back to the testing radio */
+  rx: number | null;
+  message: string;
 }

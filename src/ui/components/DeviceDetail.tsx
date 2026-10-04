@@ -4,6 +4,7 @@ import { api } from '../api';
 import { duration, n, roleLabel, sigClass } from '../format';
 import { LineChart, Pt } from './LineChart';
 import { Pill } from './Pill';
+import { SpeedTestPanel } from './SpeedTest';
 
 const RANGES = [1, 6, 24, 48, 168];
 
@@ -123,6 +124,8 @@ export function DeviceDetail({ s, id, close, thresholds }: { s: AppState; id: st
             </>
           )}
         </div>
+
+        <SpeedTestPanel s={s} id={id} />
 
         {stations.length > 0 && (
           <div className="card">
