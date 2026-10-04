@@ -95,6 +95,13 @@ const P: Record<string, React.ReactNode> = {
   swap: <path d="M4 7h13l-3-3M20 17H7l3 3" />,
   external: <path d="M14 4h6v6M20 4l-9 9M18 14v5a1 1 0 0 1-1 1H5a1 1 0 0 1-1-1V7a1 1 0 0 1 1-1h5" />,
   check: <path d="M5 12.5l4.5 4.5L19 7.5" />,
+  bulb: (
+    <>
+      <path d="M9 18h6M10 21h4" />
+      <path d="M12 3a6 6 0 0 0-3.5 10.9c.6.5 1 1.2 1 2V16h5v-.1c0-.8.4-1.5 1-2A6 6 0 0 0 12 3z" />
+    </>
+  ),
+  wrench: <path d="M14.7 6.3a4 4 0 0 0-5.4 5.4L3 18l3 3 6.3-6.3a4 4 0 0 0 5.4-5.4l-2.6 2.6-2.4-.6-.6-2.4z" />,
 };
 
 const FILLED: Record<string, React.ReactNode> = {

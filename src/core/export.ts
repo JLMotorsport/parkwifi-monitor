@@ -107,6 +107,10 @@ export function buildExport(m: Monitor, hours: number) {
     ],
     settings: { ...safeConfig, server: { ...safeConfig.server, token: '(removed)' } },
     backboneOrder: c.chain,
+    suggestions: st.suggestions.map(({ id, kind, deviceName, severity, title, change }) => ({ id, kind, deviceName, severity, title, change })),
+    changesMade: m.changes.history
+      .filter((t) => t.startedAt >= from)
+      .map((t) => ({ ...t, startedAt: iso(t.startedAt), endedAt: t.endedAt ? iso(t.endedAt) : undefined, trialEndsAt: undefined })),
     activeAlerts: st.alerts.map((a) => ({ ...a, startedAt: iso(a.startedAt) })),
     events: m.history
       .recentAlerts(2000)

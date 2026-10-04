@@ -10,11 +10,13 @@ import { Icon } from './components/Icon';
 import { Overview } from './components/Overview';
 import { StatusIcon, worst } from './components/Pill';
 import { Settings } from './components/Settings';
+import { SuggestionsPage } from './components/Suggestions';
 
-type Page = 'dashboard' | 'devices' | 'clients' | 'alerts' | 'settings';
+type Page = 'dashboard' | 'fixes' | 'devices' | 'clients' | 'alerts' | 'settings';
 
 const NAV: [Page, string, string][] = [
   ['dashboard', 'Dashboard', 'dashboard'],
+  ['fixes', 'Suggestions', 'bulb'],
   ['devices', 'Devices', 'devices'],
   ['clients', 'Clients', 'clients'],
   ['alerts', 'Alerts', 'bell'],
@@ -90,6 +92,8 @@ export function App() {
   const warn = s.alerts.length - crit;
   const overall = worst(s.alerts.map((a) => a.severity));
   const enabled = s.devices.filter((d) => d.cfg.enabled);
+  const fixCount = s.suggestions.filter((x) => x.change || x.severity !== 'info').length;
+  const testing = s.trial && ['checking', 'applying', 'testing'].includes(s.trial.status) ? s.trial : null;
 
   return (
     <div className="shell">
@@ -101,6 +105,7 @@ export function App() {
           <button key={k} className={`navbtn ${page === k ? 'on' : ''}`} aria-label={label} aria-current={page === k ? 'page' : undefined} onClick={() => go(k)}>
             <Icon name={icon} />
             {k === 'alerts' && s.alerts.length > 0 && <span className="badge">{s.alerts.length}</span>}
+            {k === 'fixes' && fixCount > 0 && <span className="badge accent">{fixCount}</span>}
             <span className="tip">{label}</span>
           </button>
         ))}
@@ -184,6 +189,14 @@ export function App() {
               </button>
             </div>
           )}
+          {testing && page !== 'fixes' && (
+            <div className="banner info">
+              Testing a change on {testing.deviceName}: {testing.title}.
+              <button className="btn small" onClick={() => go('fixes')}>
+                Watch it
+              </button>
+            </div>
+          )}
           {s.update.status === 'ready' && (
             <div className="banner info">
               Version {s.update.version} has downloaded and installs on restart.
@@ -193,6 +206,7 @@ export function App() {
             </div>
           )}
           {page === 'dashboard' && <Overview s={s} open={open} goto={go} latencyLimit={th?.latencyMs ?? 40} />}
+          {page === 'fixes' && <SuggestionsPage s={s} open={open} toast={setToast} />}
           {page === 'devices' && <DevicesPage s={s} sel={sel} setSel={setSel} thresholds={th} filter={devFilter} query={query} />}
           {page === 'clients' && <ClientsPage s={s} open={open} thresholds={th} weakOnly={weakOnly} query={query} />}
           {page === 'alerts' && <AlertsPage s={s} open={open} />}
@@ -220,7 +234,7 @@ export function App() {
 }
 
 function Crumb({ page, s }: { page: Page; s: AppState }) {
-  const titles: Record<Page, string> = { dashboard: 'Priory Park', devices: 'Devices', clients: 'Clients', alerts: 'Alerts', settings: 'Settings' };
+  const titles: Record<Page, string> = { dashboard: 'Priory Park', fixes: 'Suggestions', devices: 'Devices', clients: 'Clients', alerts: 'Alerts', settings: 'Settings' };
   const clients = s.devices.filter((d) => d.role === 'ap').reduce((a, d) => a + (d.latest?.stations?.count ?? 0), 0);
   return (
     <div className="crumb">
@@ -233,6 +247,7 @@ function Crumb({ page, s }: { page: Page; s: AppState }) {
       )}
       {page === 'clients' && <span className="faint">{clients} connected</span>}
       {page === 'settings' && <span className="faint">Version {s.version}</span>}
+      {page === 'fixes' && <span className="faint">{s.suggestions.length} found</span>}
     </div>
   );
 }

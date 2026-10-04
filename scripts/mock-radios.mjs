@@ -42,6 +42,7 @@ const jitter = (v, a) => (v === undefined ? undefined : Math.round((v + (Math.ra
 const cookie = (req) => (req.headers.cookie ?? '').match(/AIROS_[0-9A-F]{12}=([0-9a-f]+)/)?.[1];
 
 function status(r) {
+  applyCfg(r);
   const up = r.up + Math.round((Date.now() - boot) / 1000);
   return {
     host: { hostname: r.host, devmodel: r.model, fwversion: 'XM.v6.3.16', uptime: up, totalram: 30000, freeram: 6000, cpuload: 7 },
@@ -126,4 +127,54 @@ for (const [ip, r] of Object.entries(radios)) {
       }
       res.end('{}');
   });
+}
+
+// ---- SSH, for the change feature -------------------------------------------------------------
+// Each access point gets a little filesystem under /tmp/pwm-mock/<ip>: tmp/system.cfg and a fake
+// rc.softrestart that "applies" it by copying to applied.cfg. Commands from the app run in a real
+// shell with the radio paths rewritten into that folder, so the exact scripts the app sends are
+// exercised, including the nohup undo timer.
+import { execFile } from 'child_process';
+import ssh2 from 'ssh2';
+import { generateKeyPairSync } from 'crypto';
+const hostKey = generateKeyPairSync('rsa', { modulusLength: 2048, privateKeyEncoding: { type: 'pkcs1', format: 'pem' }, publicKeyEncoding: { type: 'pkcs1', format: 'pem' } }).privateKey;
+const ROOT = '/tmp/pwm-mock';
+function applyCfg(r) {
+  if (!r.dir) return;
+  try {
+    const kv = Object.fromEntries(fs.readFileSync(path.join(r.dir, 'applied.cfg'), 'utf8').split('\n').filter(Boolean).map((l) => l.split('=')));
+    if (kv['radio.1.txpower']) r.txpower = Number(kv['radio.1.txpower']);
+    if (kv['radio.1.freq']) { r.freq = Number(kv['radio.1.freq']); r.ch = (r.freq - 2407) / 5; }
+  } catch { /* not applied yet */ }
+}
+for (const [ip, r] of Object.entries(radios)) {
+  if (r.mode !== 'ap' || r.wds) continue;
+  r.dir = path.join(ROOT, ip);
+  fs.rmSync(r.dir, { recursive: true, force: true });
+  fs.mkdirSync(path.join(r.dir, 'tmp'), { recursive: true });
+  const cfg = `aaa.1.status=enabled\nradio.1.mode=master\nradio.1.freq=${r.freq}\nradio.1.txpower=${r.txpower ?? 20}\nradio.1.chanbw=20\nwireless.1.ssid=Lookout & Monks Meadow\n`;
+  fs.writeFileSync(path.join(r.dir, 'tmp/system.cfg'), cfg);
+  fs.writeFileSync(path.join(r.dir, 'applied.cfg'), cfg);
+  fs.writeFileSync(path.join(r.dir, 'softrestart'), `#!/bin/sh\necho "$(date +%T) softrestart $1" >> ${r.dir}/log\ncp ${r.dir}/tmp/system.cfg ${r.dir}/applied.cfg\n`, { mode: 0o755 });
+  const server = new ssh2.Server({ hostKeys: [hostKey] }, (client) => {
+    client
+      .on('authentication', (ctx) => (ctx.method === 'password' && ctx.username === USER && ctx.password === PASS ? ctx.accept() : ctx.reject(['password'])))
+      .on('ready', () => {
+        client.on('session', (accept) => {
+          const session = accept();
+          session.on('exec', (acc, _rej, info) => {
+            const stream = acc();
+            const cmd = info.command.replaceAll('/tmp/', `${r.dir}/tmp/`).replaceAll('/usr/etc/rc.d/rc.softrestart', `${r.dir}/softrestart`);
+            fs.appendFileSync(path.join(r.dir, 'log'), `$ ${info.command.split('\n').join(' ; ')}\n`);
+            execFile('sh', ['-c', cmd], (err, out) => {
+              stream.write(out);
+              stream.exit(err ? 1 : 0);
+              stream.end();
+            });
+          });
+        });
+      })
+      .on('error', () => undefined);
+  });
+  server.listen(22, ip, () => console.log('mock ssh', ip));
 }

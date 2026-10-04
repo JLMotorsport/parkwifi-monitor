@@ -1,4 +1,4 @@
-import type { AppState, PublicConfig, Sample, SpeedTestRecord } from '../core/types';
+import type { AppState, ChangeTrial, PublicConfig, Sample, SpeedTestRecord } from '../core/types';
 
 async function j<T>(url: string, init?: RequestInit): Promise<T> {
   const r = await fetch(url, { ...init, headers: { 'Content-Type': 'application/json', ...(init?.headers ?? {}) } });
@@ -18,6 +18,9 @@ export const api = {
   speedTests: (id: string) => j<SpeedTestRecord[]>(`./api/speedtests?id=${encodeURIComponent(id)}`),
   speedTest: (b: { from: string; to: string; direction: 'dx' | 'tx' | 'rx'; duration: number; port: number }) =>
     j<SpeedTestRecord>('./api/speedtest', { method: 'POST', body: JSON.stringify(b) }),
+  changeStart: (suggestion: string) => j<ChangeTrial>('./api/change/start', { method: 'POST', body: JSON.stringify({ suggestion }) }),
+  changeKeep: () => j<ChangeTrial>('./api/change/keep', { method: 'POST' }),
+  changeUndo: () => j<ChangeTrial>('./api/change/undo', { method: 'POST' }),
   checkUpdate: () => j('./api/app/check-update', { method: 'POST' }),
   installUpdate: () => j('./api/app/install-update', { method: 'POST' }),
   autostart: (on: boolean) => j('./api/app/autostart', { method: 'POST', body: JSON.stringify({ on }) }),

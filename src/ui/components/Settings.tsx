@@ -262,6 +262,8 @@ export function Settings({ s, toast, onSaved, theme, setTheme }: { s: AppState; 
           <Num label="AP noise floor above (dBm)" v={c.thresholds.apNoise} on={(v) => th('apNoise', v)} />
           <Num label="Bad polls before alerting" v={c.thresholds.sustainPolls} on={(v) => th('sustainPolls', v)} />
           <Num label="Keep history (days)" v={c.retentionDays} on={(v) => set('retentionDays', v)} />
+          <Num label="Test each change for (minutes)" v={c.trialMinutes ?? 10} on={(v) => set('trialMinutes', v)} />
+          <Num label="Radio SSH port (for changes)" v={c.sshPort ?? 22} on={(v) => set('sshPort', v)} />
           <label className="chk">
             <input type="checkbox" checked={c.notifications} onChange={(e) => set('notifications', e.target.checked)} /> Windows notifications for alerts
           </label>

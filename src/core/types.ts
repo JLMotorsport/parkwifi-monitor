@@ -54,6 +54,10 @@ export interface Config {
   speedTestPort?: number;
   /** set once the app has switched "Start with Windows" on for the first time */
   autostartInitialised?: boolean;
+  /** SSH port on the radios, used only to make changes (default 22) */
+  sshPort?: number;
+  /** how long a change is trialled before it is kept or undone (minutes, default 10) */
+  trialMinutes?: number;
 }
 
 export interface PingResult {
@@ -145,6 +149,65 @@ export interface UpdateInfo {
   message?: string;
 }
 
+/** A setting the app is able to change on an access point. */
+export interface RadioChange {
+  txPower?: number;
+  frequency?: number;
+}
+
+export type SuggestionKind = 'channel' | 'power' | 'noise' | 'restarts' | 'no-ip' | 'weak-clients' | 'backbone-link' | 'slow-hop' | 'login';
+
+export interface Suggestion {
+  /** stable across polls: `<kind>:<deviceId>` */
+  id: string;
+  kind: SuggestionKind;
+  deviceId: string;
+  deviceName: string;
+  severity: Severity | 'info';
+  title: string;
+  why: string;
+  fix: string;
+  /** present when the app can make the change itself */
+  change?: RadioChange;
+  changeLabel?: string;
+}
+
+export interface TrialStats {
+  samples: number;
+  reachablePct: number;
+  pingAvg: number | null;
+  lossAvg: number | null;
+  clients: number | null;
+  noise: number | null;
+  txPower: number | null;
+  frequency: number | null;
+}
+
+export interface TrialCheck {
+  name: string;
+  ok: boolean;
+  detail: string;
+}
+
+export interface ChangeTrial {
+  id: string;
+  deviceId: string;
+  deviceName: string;
+  ip: string;
+  suggestionId: string;
+  title: string;
+  change: RadioChange;
+  before: RadioChange;
+  status: 'checking' | 'applying' | 'testing' | 'kept' | 'reverted' | 'failed';
+  startedAt: number;
+  trialEndsAt?: number;
+  endedAt?: number;
+  baseline?: TrialStats;
+  result?: TrialStats;
+  checks: TrialCheck[];
+  message: string;
+}
+
 export interface AppState {
   now: number;
   version: string;
@@ -161,6 +224,9 @@ export interface AppState {
   needsSetup: boolean;
   /** device id currently running a speed test, if any */
   speedTestRunning: string | null;
+  suggestions: Suggestion[];
+  trial: ChangeTrial | null;
+  changes: ChangeTrial[];
 }
 
 export interface PublicConfig extends Omit<Config, 'passwordEnc'> {

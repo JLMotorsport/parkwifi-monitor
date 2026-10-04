@@ -1,6 +1,9 @@
 import { EventEmitter } from 'events';
 import { AirOSClient, AirOSError } from './airos';
+import { advise, isAccessPoint } from './advisor';
+import { AirOSSsh } from './airos-ssh';
 import { AlertEngine, roleOf } from './alerts';
+import { ChangeManager } from './changes';
 import { ConfigStore, SecretBox, slug } from './config';
 import { ping } from './ping';
 import { HistoryStore } from './store';
@@ -40,6 +43,7 @@ export class Monitor extends EventEmitter {
   nextPoll: number | null = null;
   polling = false;
   speedTestRunning: string | null = null;
+  readonly changes: ChangeManager;
 
   constructor(dataDir: string, box: SecretBox, readonly version: string, public hooks: MonitorHooks = {}) {
     super();
@@ -66,13 +70,33 @@ export class Monitor extends EventEmitter {
       const prev = this.history.previous(d.id);
       if (prev) this.latest.set(d.id, prev);
     }
+    this.changes = new ChangeManager(dataDir, {
+      suggestions: () => this.suggestions(),
+      device: (id) => {
+        const st = this.deviceStates().find((d) => d.cfg.id === id);
+        return st ? { ip: st.cfg.ip, name: st.cfg.name, isAp: isAccessPoint(st, this.cfg.config.chain) } : null;
+      },
+      history: (id, hours) => this.history.range(id, hours),
+      sample: (id) => this.sampleDevice(id),
+      ssh: (ip) => new AirOSSsh(ip, this.cfg.config.username, this.cfg.password(), this.cfg.config.sshPort ?? 22),
+      trialMinutes: () => Math.min(30, Math.max(3, this.cfg.config.trialMinutes ?? 10)),
+      thresholds: () => this.cfg.config.thresholds,
+      changed: () => this.emit('change'),
+      log: (msg) => console.log(`[changes] ${msg}`),
+    });
+  }
+
+  suggestions() {
+    return advise({ devices: this.deviceStates(), chain: this.cfg.config.chain, events: this.events, thresholds: this.cfg.config.thresholds, now: Date.now() });
   }
 
   start() {
     this.schedule(2000);
+    void this.changes.recover();
   }
 
   stop() {
+    this.changes.shutdown();
     if (this.timer) clearTimeout(this.timer);
     this.timer = null;
   }
@@ -106,28 +130,9 @@ export class Monitor extends EventEmitter {
       const devs = c.devices.filter((d) => d.enabled);
       const hasPassword = !!this.cfg.password();
       await pool(devs, 10, async (d) => {
-        const [p, radio] = await Promise.all([
-          ping(d.ip, c.pingCount, c.pingSize),
-          hasPassword ? this.readRadio(d) : Promise.resolve({ error: 'No password set', kind: 'auth' as const }),
-        ]);
-        const s: Sample = { t, id: d.id, ping: p };
-        if ('status' in radio && radio.status) {
-          s.radio = radio.status;
-          const st = radio.stations ?? [];
-          const sig = st.map((x) => x.signal).filter((x): x is number => x !== null);
-          s.stations = {
-            count: st.length,
-            weak: sig.filter((x) => x <= c.thresholds.weakSignal).length,
-            avgSignal: sig.length ? Math.round(sig.reduce((a, b) => a + b, 0) / sig.length) : null,
-            worstSignal: sig.length ? Math.min(...sig) : null,
-            noIp: st.filter((x) => !x.ip || x.ip === '0.0.0.0').length,
-          };
-          this.live.set(d.id, st);
-        } else if ('error' in radio) {
-          s.error = radio.error;
-        }
+        const { s, kind } = await this.measure(d, t, hasPassword);
         const prev = this.latest.get(d.id);
-        this.alerts.evaluate(d, roleOf(d, s.radio ? s : prev), s, prev, c.thresholds, 'kind' in radio ? radio.kind : undefined);
+        this.alerts.evaluate(d, roleOf(d, s.radio ? s : prev), s, prev, c.thresholds, kind);
         this.latest.set(d.id, s);
         samples.push(s);
       });
@@ -144,6 +149,43 @@ export class Monitor extends EventEmitter {
       this.schedule(Math.max(15, c.pollSeconds) * 1000);
       this.emit('change');
     }
+  }
+
+  /** Ping and read one radio. Used by the poll loop and by change trials. */
+  private async measure(d: DeviceCfg, t: number, hasPassword: boolean): Promise<{ s: Sample; kind?: string }> {
+    const c = this.cfg.config;
+    const [p, radio] = await Promise.all([
+      ping(d.ip, c.pingCount, c.pingSize),
+      hasPassword ? this.readRadio(d) : Promise.resolve({ error: 'No password set', kind: 'auth' as const }),
+    ]);
+    const s: Sample = { t, id: d.id, ping: p };
+    if ('status' in radio && radio.status) {
+      s.radio = radio.status;
+      const st = radio.stations ?? [];
+      const sig = st.map((x) => x.signal).filter((x): x is number => x !== null);
+      s.stations = {
+        count: st.length,
+        weak: sig.filter((x) => x <= c.thresholds.weakSignal).length,
+        avgSignal: sig.length ? Math.round(sig.reduce((a, b) => a + b, 0) / sig.length) : null,
+        worstSignal: sig.length ? Math.min(...sig) : null,
+        noIp: st.filter((x) => !x.ip || x.ip === '0.0.0.0').length,
+      };
+      this.live.set(d.id, st);
+    } else if ('error' in radio) {
+      s.error = radio.error;
+    }
+    return { s, kind: 'kind' in radio ? radio.kind : undefined };
+  }
+
+  /** One extra reading of a single radio, stored like a normal poll (no alerting). */
+  async sampleDevice(id: string): Promise<Sample | null> {
+    const d = this.cfg.config.devices.find((x) => x.id === id);
+    if (!d) return null;
+    const { s } = await this.measure(d, Date.now(), !!this.cfg.password());
+    this.latest.set(d.id, s);
+    this.history.add([s]);
+    this.emit('change');
+    return s;
   }
 
   private async readRadio(d: DeviceCfg): Promise<{ status?: Sample['radio']; stations?: Station[] } | { error: string; kind: string }> {
@@ -167,9 +209,9 @@ export class Monitor extends EventEmitter {
     }
   }
 
-  state(): AppState {
+  private deviceStates(): DeviceState[] {
     const c = this.cfg.config;
-    const devices: DeviceState[] = c.devices.map((d) => {
+    return c.devices.map((d) => {
       const latest = this.latest.get(d.id);
       let health: DeviceState['health'] = latest ? 'good' : 'unknown';
       const rank = { good: 0, unknown: 0, warning: 1, serious: 2, critical: 3 } as const;
@@ -179,6 +221,11 @@ export class Monitor extends EventEmitter {
       if (!d.enabled) health = 'unknown';
       return { cfg: d, role: roleOf(d, latest), latest, stationsLive: this.live.get(d.id), health };
     });
+  }
+
+  state(): AppState {
+    const c = this.cfg.config;
+    const devices = this.deviceStates();
     return {
       now: Date.now(),
       version: this.version,
@@ -194,6 +241,9 @@ export class Monitor extends EventEmitter {
       autostart: this.hooks.autostart?.() ?? null,
       needsSetup: !this.cfg.password(),
       speedTestRunning: this.speedTestRunning,
+      suggestions: advise({ devices, chain: c.chain, events: this.events, thresholds: c.thresholds, now: Date.now() }),
+      trial: this.changes.trial,
+      changes: this.changes.history.slice(0, 20),
     };
   }
 

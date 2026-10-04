@@ -103,7 +103,7 @@ export function startServer(m: Monitor, uiDir: string, actions: AppActions = {})
           case 'PUT /api/config': {
             const body = (await readBody(req)) as Partial<Config> & { password?: string };
             const c = m.cfg.config;
-            const allowed: (keyof Config)[] = ['username', 'speedTestPort', 'pollSeconds', 'pingCount', 'pingSize', 'devices', 'probes', 'chain', 'thresholds', 'notifications', 'retentionDays', 'server'];
+            const allowed: (keyof Config)[] = ['username', 'speedTestPort', 'pollSeconds', 'pingCount', 'pingSize', 'devices', 'probes', 'chain', 'thresholds', 'notifications', 'retentionDays', 'server', 'sshPort', 'trialMinutes'];
             for (const k of allowed) if (body[k] !== undefined) (c as unknown as Record<string, unknown>)[k] = body[k];
             if (typeof body.password === 'string' && body.password.length) m.cfg.setPassword(body.password);
             c.pollSeconds = Math.max(15, Number(c.pollSeconds) || 60);
@@ -139,6 +139,23 @@ export function startServer(m: Monitor, uiDir: string, actions: AppActions = {})
               return send(409, { error: (e as Error).message });
             }
           }
+          case 'POST /api/change/start': {
+            const b = (await readBody(req)) as { suggestion?: string };
+            try {
+              return send(200, await m.changes.start(String(b.suggestion ?? '')));
+            } catch (e) {
+              return send(409, { error: (e as Error).message });
+            }
+          }
+          case 'POST /api/change/keep':
+          case 'POST /api/change/undo':
+            try {
+              if (url.pathname.endsWith('keep')) await m.changes.keepNow();
+              else await m.changes.undo();
+              return send(200, m.changes.trial);
+            } catch (e) {
+              return send(409, { error: (e as Error).message });
+            }
           case 'POST /api/poll':
             void m.pollNow();
             return send(202, { ok: true });
