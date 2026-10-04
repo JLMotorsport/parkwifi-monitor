@@ -11,6 +11,18 @@ export function chainDevices(s: AppState): DeviceState[] {
   return s.chain.map((id) => byId.get(id)).filter((d): d is DeviceState => !!d && d.cfg.enabled);
 }
 
+/**
+ * Rough internet latency for a customer at this radio: its ping from this PC plus this PC's
+ * internet ping. Both legs are measured from the office, so the office-to-UDR2 hop is counted
+ * twice (about 1 ms). It cannot see a problem on UDR3's own route out.
+ */
+export function estInternet(s: AppState, d?: DeviceState | PingResult): { ms: number; lossPct: number } | null {
+  const net = (s.probes.find((p) => p.probe.id === 'internet') ?? s.probes[0])?.latest?.ping;
+  const p = d && 'sent' in d ? d : d?.latest?.ping;
+  if (!net || !p || net.avg == null || p.avg == null || !net.received || !p.received) return null;
+  return { ms: Math.round(p.avg + net.avg), lossPct: Math.round(100 - (100 - p.lossPct) * (100 - net.lossPct) / 100) };
+}
+
 export function probeHealth(p?: Pick<PingResult, 'received' | 'lossPct' | 'avg'>): Health {
   if (!p) return 'unknown';
   if (p.received === 0) return 'critical';

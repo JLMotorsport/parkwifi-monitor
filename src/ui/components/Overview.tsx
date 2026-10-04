@@ -1,5 +1,5 @@
 import type { AppState, DeviceState } from '../../core/types';
-import { accessPoints, chainDevices, goodShare, probeHealth, shareHealth } from '../derive';
+import { accessPoints, chainDevices, estInternet, goodShare, probeHealth, shareHealth } from '../derive';
 import { duration, n } from '../format';
 import { AlertList } from './Alerts';
 import { Icon } from './Icon';
@@ -28,6 +28,8 @@ export function Overview({ s, open, goto, latencyLimit }: Props) {
   const dayAgo = s.now - 86400000;
   const restarts = s.events.filter((e) => e.event && e.key.split(':')[1] === 'reboot' && e.startedAt >= dayAgo).length;
   const netH = probeHealth(internet?.latest?.ping);
+  const endNet = estInternet(s, end);
+  const endNetH: Health = !endNet ? (netH === 'critical' ? 'critical' : 'unknown') : endNet.lossPct > 20 || endNet.ms > 150 ? 'serious' : endNet.ms > 80 ? 'warning' : 'good';
 
   const apRows = [...aps].sort((a, b) => (b.latest?.stations?.weak ?? 0) - (a.latest?.stations?.weak ?? 0));
 
@@ -48,6 +50,13 @@ export function Overview({ s, open, goto, latencyLimit }: Props) {
           big={n(internet?.latest?.ping.avg, '', 0)}
           small="ms"
           foot={`${internet?.probe.host ?? ''} from this PC · loss ${n(internet?.latest?.ping.lossPct, '%')}`}
+        />
+        <Tile
+          label={`Internet at ${end?.cfg.site || 'the end'}`}
+          h={endNetH}
+          big={endNet ? String(endNet.ms) : '–'}
+          small="ms"
+          foot={endNet ? `estimate · loss ${endNet.lossPct}%` : 'estimate needs both pings'}
         />
         <Tile
           label="Clients"
@@ -77,7 +86,7 @@ export function Overview({ s, open, goto, latencyLimit }: Props) {
       <section className="card">
         <div className="card-h">
           <h2>Backbone</h2>
-          <span className="sub">Ping from this PC; the figure over each link is the delay that hop adds.</span>
+          <span className="sub">Ping from this PC; the figure over each link is the delay that hop adds. "Internet" under each site is an estimate: its ping plus this PC's internet ping.</span>
         </div>
         <Topology s={s} chain={chain} open={open} latencyLimit={latencyLimit} />
       </section>
@@ -219,6 +228,9 @@ function Topology({ s, chain, open, latencyLimit }: { s: AppState; chain: Device
                 <span className="ip">{p.probe.host}</span>
               </div>
               <div className={`lat ink-${h === 'good' ? 'unknown' : h}`}>{n(p.latest?.ping.avg, ' ms')}</div>
+              <div className="net" title="Estimate: this router's ping plus this PC's internet ping">
+                Internet ≈ {estInternet(s, p.latest?.ping)?.ms ?? '–'} ms
+              </div>
             </div>,
             <div className="tlink" key={p.probe.id + '-l'}>
               <span className="add" />
@@ -248,6 +260,9 @@ function Topology({ s, chain, open, latencyLimit }: { s: AppState; chain: Device
                 ))}
               </div>
               <div className={`lat ${(last.latest?.ping.avg ?? 0) > latencyLimit ? 'ink-critical' : ''}`}>{n(last.latest?.ping.avg, ' ms')}</div>
+              <div className="net" title="Estimate: this site's ping plus this PC's internet ping">
+                Internet ≈ {estInternet(s, last)?.ms ?? '–'} ms
+              </div>
             </div>,
             next && <Hop key={g[0].cfg.id + '-l'} from={last} to={next[0]} />,
           ];

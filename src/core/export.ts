@@ -60,6 +60,7 @@ export function buildExport(m: Monitor, hours: number) {
     ...st.probes.map((p) => ({ id: 'probe:' + p.probe.id, name: p.probe.name, ip: p.probe.host, site: '', enabled: true, role: 'ping-only', cfgRole: 'ping-only' })),
   ];
 
+  const net = (st.probes.find((p) => p.probe.id === 'internet') ?? st.probes[0])?.latest?.ping;
   const devices = targets.map((t) => {
     const rows = m.history.range(t.id, hours, Number.MAX_SAFE_INTEGER);
     const byHour = new Map<number, Sample[]>();
@@ -81,6 +82,10 @@ export function buildExport(m: Monitor, hours: number) {
       ...t,
       role: latest ? roleOf(latest.cfg, latest.latest) : t.role,
       health: latest?.health,
+      estInternetMsNow:
+        net?.avg != null && net.received && latest?.latest?.ping.avg != null && latest.latest.ping.received
+          ? Math.round(latest.latest.ping.avg + net.avg)
+          : undefined,
       latest: latest?.latest ? { ...latest.latest, t: iso(latest.latest.t), stationsLive: latest.stationsLive } : undefined,
       totals: { ...compact(summarise(rows)), restartsSeen: restarts, frequenciesSeen: freqs },
       hourly: [...byHour.entries()].sort((a, b) => a[0] - b[0]).map(([h, rs]) => ({ hour: iso(h), ...compact(summarise(rs)) })),
@@ -97,6 +102,7 @@ export function buildExport(m: Monitor, hours: number) {
       'Ping figures are measured from the PC running the app, so each backbone hop includes all hops before it.',
       'Hourly rows: pingAvgMs = mean of per-poll averages, pingP95Ms = 95th percentile of those, pingWorstMs = single worst reply.',
       'signalMin/ccqMin/capacityMin/txRateMin are the lowest values seen in the hour; noiseMax/clientsMax/weakClientsMax the highest.',
+      'estInternetMsNow = this radio\'s ping plus the office PC\'s internet ping: an estimate of what a customer there sees, not a measurement from the radio.',
       `A client counts as weak at or below ${c.thresholds.weakSignal} dBm.`,
     ],
     settings: { ...safeConfig, server: { ...safeConfig.server, token: '(removed)' } },

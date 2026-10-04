@@ -1,6 +1,7 @@
 import { useEffect, useState } from 'react';
 import type { AppState, DeviceState, Sample, Thresholds } from '../../core/types';
 import { api } from '../api';
+import { estInternet } from '../derive';
 import { duration, n, roleLabel, sigClass } from '../format';
 import { Icon } from './Icon';
 import { LineChart, Pt } from './LineChart';
@@ -115,6 +116,7 @@ export function DevicePanel({ s, id, close, thresholds }: { s: AppState; id: str
             <Fact k="TX power" v={n(r?.txPower, ' dBm')} />
             <Fact k="Ping (worst)" v={`${n(d.latest?.ping.avg)} (${n(d.latest?.ping.max)}) ms`} bad={(d.latest?.ping.avg ?? 0) > thresholds.latencyMs} />
             <Fact k="Packet loss" v={n(d.latest?.ping.lossPct, '%')} bad={(d.latest?.ping.lossPct ?? 0) > thresholds.lossPct} />
+            <Fact k="Internet from here (estimate)" v={(() => { const e = estInternet(s, d); return e ? `${e.ms} ms · ${e.lossPct}% loss` : '–'; })()} />
             <Fact k="CPU / memory" v={`${n(r?.cpu, '%')} / ${n(r?.memPct, '%')}`} />
             <Fact k="Uptime" v={duration(r?.uptime)} />
           </div>

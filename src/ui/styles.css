@@ -242,7 +242,7 @@ a:hover { color: var(--accent-hover); }
 .warnv { color: var(--warning-ink); font-weight: 600; }
 
 /* ---------- KPI tiles ---------- */
-.tiles { display: grid; grid-template-columns: repeat(auto-fit, minmax(220px, 1fr)); gap: 12px; }
+.tiles { display: grid; grid-template-columns: repeat(auto-fit, minmax(200px, 1fr)); gap: 12px; }
 .tile { padding: 14px 16px; text-align: left; font: inherit; color: inherit; }
 button.tile { cursor: pointer; }
 button.tile:hover { border-color: var(--border-strong); }
@@ -280,6 +280,7 @@ button.tile:hover { border-color: var(--border-strong); }
 .tnode .ip { font-family: var(--mono); font-size: 11px; color: var(--text-3); border: 0; background: none; padding: 0; cursor: pointer; }
 .tnode .ip:hover { color: var(--accent); text-decoration: underline; }
 .tnode .lat { font-size: 12px; font-weight: 600; font-variant-numeric: tabular-nums; }
+.tnode .net { font-size: 11px; color: var(--text-3); font-variant-numeric: tabular-nums; }
 .tlink { flex: 1 1 150px; display: flex; flex-direction: column; align-items: center; padding-top: 18px; gap: 6px; min-width: 90px; }
 .tlink .line { height: 3px; width: 100%; background: var(--cable); border-radius: 2px; }
 .tlink.air .line { background: repeating-linear-gradient(90deg, var(--accent) 0 8px, transparent 8px 13px); }
