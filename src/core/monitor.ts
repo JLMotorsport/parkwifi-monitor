@@ -160,6 +160,8 @@ export class Monitor extends EventEmitter {
       return { status: st.parsed, stations: sta.parsed };
     } catch (e) {
       const err = e as AirOSError;
+      // start the next poll with a fresh connection rather than reusing one that failed
+      this.clients.delete(d.id);
       this.raw.set(d.id, { error: err.message, t: Date.now() });
       return { error: err.message, kind: err.kind ?? 'network' };
     }

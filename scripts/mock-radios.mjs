@@ -27,6 +27,8 @@ const radios = {
     sta: [['60:02:B4:46:FB:5A', '192.168.2.205', -58, 117, 52, 92, 5], ['9A:0E:4E:5B:84:E5', '192.168.2.150', -75, 26, 19.5, 52, 209], ['AA:42:A1:05:28:4C', '192.168.2.218', -74, 78, 6.5, 25, 31]] },
   '127.0.0.35': { host: 'Lookout AP#5 (http only)', model: 'NanoStation M2', mode: 'ap', wds: 0, freq: 2412, ch: 1, noise: -88, ccq: 880, up: 300000, txpower: 17, httpOnly: true,
     sta: [['AA:BB:CC:00:11:22', '192.168.2.120', -62, 65, 52, 90, 2]] },
+  '127.0.0.36': { host: 'Lookout AP#6 (https redirects)', model: 'NanoStation M2', mode: 'ap', wds: 0, freq: 2437, ch: 6, noise: -90, ccq: 910, up: 300000, txpower: 17, httpsRedirect: true,
+    sta: [] },
   '127.0.0.42': { host: 'Monks AP#4 (MM)', model: 'NanoBeam M2', mode: 'ap', wds: 0, freq: 2457, ch: 10, noise: -89, ccq: 940, up: 790000, txpower: 20,
     sta: [['3A:57:9D:9C:14:74', '192.168.2.88', -64, 26, 78, 93, 3]] },
 };
@@ -54,7 +56,14 @@ function status(r) {
 }
 
 for (const [ip, r] of Object.entries(radios)) {
-  const serve = (handler) => (r.httpOnly ? http.createServer(handler).listen(80, ip) : https.createServer(tls, handler).listen(443, ip, () => console.log('mock airOS', ip, r.host)));
+  const serve = (handler) => {
+    if (r.httpOnly) return http.createServer(handler).listen(80, ip);
+    if (r.httpsRedirect) {
+      http.createServer(handler).listen(80, ip);
+      return https.createServer(tls, (req, res) => { res.writeHead(302, { Location: `http://${ip}${req.url}` }); res.end(); }).listen(443, ip);
+    }
+    return https.createServer(tls, handler).listen(443, ip, () => console.log('mock airOS', ip, r.host));
+  };
   const mac = '0027226447' + ip.split('.')[3].padStart(2, '0');
   serve((req, res) => {
       const sid = cookie(req);

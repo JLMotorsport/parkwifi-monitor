@@ -35,6 +35,8 @@ export interface SpeedTestResult {
 
 const round2 = (n: unknown) => (typeof n === 'number' && Number.isFinite(n) ? Math.round(n * 100) / 100 : null);
 
+class SchemeSwitch extends Error {}
+
 export class AirOSError extends Error {
   constructor(message: string, readonly kind: 'auth' | 'network' | 'parse') {
     super(message);
@@ -106,6 +108,18 @@ export class AirOSClient {
   }
 
   async login(): Promise<void> {
+    for (let attempt = 0; attempt < 2; attempt++) {
+      try {
+        return await this.loginOnce();
+      } catch (e) {
+        // A radio with HTTPS switched off can answer on 443 with a redirect to http://. Switch and retry once.
+        if (e instanceof SchemeSwitch && attempt === 0) continue;
+        throw e;
+      }
+    }
+  }
+
+  private async loginOnce(): Promise<void> {
     // 1. The radio hands out its own session cookie (AIROS_SESSIONID or AIROS_<mac>) on the login page.
     this.cookies.clear();
     this.trace = [];
@@ -123,8 +137,8 @@ export class AirOSClient {
         throw e;
       }
     }
-    if (!this.secure) this.trace.push('using http');
-    this.trace.push(`GET /login.cgi ${g.status} cookies[${[...this.cookies.keys()].join(',') || 'none'}]`);
+    this.trace.push(`${this.secure ? 'https' : 'http'} GET /login.cgi ${g.status}${g.headers.location ? ' -> ' + g.headers.location : ''} cookies[${[...this.cookies.keys()].join(',') || 'none'}]`);
+    this.checkSchemeSwitch(g);
     if (![...this.cookies.keys()].some((k) => k.startsWith('AIROS'))) {
       // older builds expect the browser to make one up
       this.cookies.set('AIROS_SESSIONID', crypto.randomBytes(16).toString('hex'));
@@ -139,21 +153,35 @@ export class AirOSClient {
       Referer: `${origin}/login.cgi`,
     });
     this.trace.push(`POST /login.cgi ${r.status}${r.headers.location ? ' -> ' + r.headers.location : ''}`);
+    this.checkSchemeSwitch(r);
     if (r.status !== 302 && r.status !== 303) {
       throw new AirOSError(`${this.ip}: login rejected (check username/password). Steps: ${this.trace.join('; ')}`, 'auth');
     }
     const loc = String(r.headers.location ?? '');
     if (/login\.cgi/i.test(loc)) {
-      throw new AirOSError(`${this.ip}: login rejected (check username/password)`, 'auth');
+      throw new AirOSError(`${this.ip}: login rejected (check username/password). Steps: ${this.trace.join('; ')}`, 'auth');
     }
 
     // 3. airOS 6 only activates the session once the landing page has been loaded.
     const act = await this.request('GET', '/index.cgi', undefined, { Referer: `${origin}/login.cgi` });
     this.trace.push(`GET /index.cgi ${act.status}${act.headers.location ? ' -> ' + act.headers.location : ''}`);
     if ((act.status === 302 || act.status === 303) && /login\.cgi/i.test(String(act.headers.location ?? ''))) {
-      throw new AirOSError(`${this.ip}: session was not activated after login`, 'auth');
+      throw new AirOSError(`${this.ip}: session was not activated after login. Steps: ${this.trace.join('; ')}`, 'auth');
     }
     this.loggedIn = true;
+  }
+
+  /** If an HTTPS request is redirected to plain http://, the radio's secure web server is off. */
+  private checkSchemeSwitch(r: Resp) {
+    const loc = String(r.headers.location ?? '');
+    if (this.secure && /^http:\/\//i.test(loc)) {
+      this.secure = false;
+      throw new SchemeSwitch();
+    }
+    if (!this.secure && /^https:\/\//i.test(loc)) {
+      this.secure = true;
+      throw new SchemeSwitch();
+    }
   }
 
   private async getJSON<T>(path: string, retry = true, headers: Record<string, string> = {}): Promise<T> {
