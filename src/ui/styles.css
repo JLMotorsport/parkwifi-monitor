@@ -20,8 +20,9 @@
   --series: #0b5fd1;
   --grid: #eef0f3;
   --track: #e9ecf1;
-  --rail: #1b1f27;
-  --rail-hover: #2a303b;
+  --chrome: #0b0d11;
+  --rail: #0b0d11;
+  --rail-hover: #1e232b;
   --rail-icon: #9aa3b2;
   --rail-on: #7fb0ff;
   --cable: #b9c2cf;
@@ -64,8 +65,8 @@
     --series: #4d95ff;
     --grid: #232830;
     --track: #2a2f38;
-    --rail: #0a0c0f;
-    --rail-hover: #1c2028;
+    --rail: #0b0d11;
+    --rail-hover: #1e232b;
     --rail-icon: #8d95a3;
     --rail-on: #7fb0ff;
     --cable: #4a5262;
@@ -85,7 +86,9 @@
     color-scheme: dark;
   }
 }
-:root[data-theme='dark'] {
+/* .chrome (title bar and icon rail) always uses the dark tokens, whatever the theme */
+:root[data-theme='dark'],
+.chrome {
   --bg: #0f1115;
   --surface: #171a20;
   --surface-2: #1d2128;
@@ -104,8 +107,8 @@
   --series: #4d95ff;
   --grid: #232830;
   --track: #2a2f38;
-  --rail: #0a0c0f;
-  --rail-hover: #1c2028;
+  --rail: #0b0d11;
+  --rail-hover: #1e232b;
   --rail-icon: #8d95a3;
   --rail-on: #7fb0ff;
   --cable: #4a5262;
@@ -140,14 +143,27 @@ a:hover { color: var(--accent-hover); }
 .num { font-variant-numeric: tabular-nums; }
 .spacer { flex: 1; }
 
-/* ---------- shell: icon rail + page ---------- */
-.shell { display: flex; min-height: 100vh; }
-.rail {
-  flex: 0 0 64px; background: var(--rail); display: flex; flex-direction: column; align-items: center; gap: 6px;
-  padding: 14px 0; position: sticky; top: 0; height: 100vh; z-index: 20;
+/* ---------- window chrome: title bar + icon rail ---------- */
+/* The native title bar is hidden; Windows draws its own buttons over the right end of .titlebar
+   in the same colour (titleBarOverlay), so the bar reserves that space via titlebar-area env(). */
+.app { min-height: 100vh; background: var(--chrome); }
+.titlebar {
+  position: sticky; top: 0; z-index: 30; height: 48px; background: var(--chrome); color: var(--text);
+  display: flex; align-items: center; gap: 10px; padding: 0 12px 0 14px;
+  padding-right: calc(12px + 100vw - env(titlebar-area-x, 0px) - env(titlebar-area-width, 100vw));
+  -webkit-app-region: drag; user-select: none;
 }
-.rail .logo {
-  width: 36px; height: 36px; border-radius: 9px; background: var(--accent); display: grid; place-items: center; margin-bottom: 14px;
+.titlebar button, .titlebar a, .titlebar input, .titlebar .pill { -webkit-app-region: no-drag; }
+.titlebar .brand { display: flex; align-items: center; gap: 10px; font-weight: 700; font-size: 14px; margin-right: 6px; }
+.titlebar .logo { width: 28px; height: 28px; border-radius: 7px; background: #0b5fd1; display: grid; place-items: center; }
+.titlebar .btn { background: rgba(255, 255, 255, 0.06); border-color: rgba(255, 255, 255, 0.1); height: 30px; }
+.titlebar .btn:hover { background: rgba(255, 255, 255, 0.12); }
+.titlebar .btn.primary { background: #0b5fd1; border-color: #0b5fd1; color: #fff; }
+.titlebar .btn.primary:hover { background: #0a52b5; }
+.shell { display: flex; min-height: calc(100vh - 48px); background: var(--chrome); }
+.rail {
+  flex: 0 0 64px; background: var(--chrome); display: flex; flex-direction: column; align-items: center; gap: 6px;
+  padding: 8px 0 14px; position: sticky; top: 48px; height: calc(100vh - 48px); z-index: 20;
 }
 .navbtn {
   position: relative; width: 44px; height: 44px; border-radius: 8px; border: 0; background: transparent; cursor: pointer;
@@ -165,11 +181,16 @@ a:hover { color: var(--accent-hover); }
 }
 .navbtn:hover .tip, .navbtn:focus-visible .tip { opacity: 1; }
 .rail .grow { flex: 1; }
-.page { flex: 1 1 auto; min-width: 0; display: flex; flex-direction: column; }
+/* the page sits on the chrome like a panel, rounded where it meets the bar and rail */
+.page {
+  flex: 1 1 auto; min-width: 0; display: flex; flex-direction: column; background: var(--bg); color: var(--text);
+  border-top-left-radius: 12px;
+}
 
 .topbar {
-  position: sticky; top: 0; z-index: 10; background: var(--surface); border-bottom: 1px solid var(--border);
+  position: sticky; top: 48px; z-index: 10; background: var(--surface); border-bottom: 1px solid var(--border);
   padding: 0 24px; min-height: 56px; display: flex; align-items: center; gap: 14px; flex-wrap: wrap;
+  border-top-left-radius: 12px;
 }
 .crumb { display: flex; align-items: center; gap: 10px; min-width: 0; }
 .crumb b { font-size: 15px; font-weight: 700; }
@@ -180,9 +201,10 @@ a:hover { color: var(--accent-hover); }
 
 @media (max-width: 700px) {
   .shell { flex-direction: column; }
-  .rail { flex: 0 0 auto; height: auto; width: 100%; flex-direction: row; padding: 6px 10px; justify-content: space-between; top: 0; }
-  .rail .logo { margin: 0 6px 0 0; width: 32px; height: 32px; }
+  .titlebar { position: static; }
+  .rail { flex: 0 0 auto; height: auto; width: 100%; flex-direction: row; padding: 4px 10px 8px; justify-content: space-between; top: 0; }
   .rail .grow { display: none; }
+  .page, .topbar { border-top-left-radius: 0; }
   .navbtn .tip { display: none; }
   .topbar { position: static; padding: 8px 16px; }
   .content { padding: 12px 16px 24px; }
@@ -340,8 +362,8 @@ td.dim { color: var(--text-2); }
 .devlayout { display: flex; flex-wrap: wrap; align-items: flex-start; gap: 16px; }
 .devlayout > .card:first-child { flex: 999 1 560px; }
 .panel {
-  flex: 1 1 400px; max-width: 480px; display: flex; flex-direction: column; position: sticky; top: 72px;
-  max-height: calc(100vh - 88px); overflow: auto;
+  flex: 1 1 400px; max-width: 480px; display: flex; flex-direction: column; position: sticky; top: 120px;
+  max-height: calc(100vh - 136px); overflow: auto;
 }
 @media (max-width: 1000px) { .panel { max-width: none; position: static; max-height: none; } }
 .panel-h { padding: 16px; border-bottom: 1px solid var(--border-soft); display: flex; gap: 12px; align-items: center; }
@@ -401,7 +423,7 @@ label.chk input { width: 16px; height: 16px; accent-color: var(--accent); }
 .hint { font-size: 12px; color: var(--text-3); }
 .row-actions { display: flex; gap: 8px; flex-wrap: wrap; align-items: center; }
 .savebar {
-  position: sticky; top: 56px; z-index: 5; background: var(--bg); padding: 8px 0; margin: -8px 0;
+  position: sticky; top: 104px; z-index: 5; background: var(--bg); padding: 8px 0; margin: -8px 0;
 }
 .banner {
   padding: 10px 14px; border-radius: var(--radius); background: var(--warning-bg); color: var(--warning-ink);

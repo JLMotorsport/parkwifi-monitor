@@ -51,7 +51,9 @@ function showWindow() {
     title: 'Park WiFi Monitor',
     icon: icon('icon.png'),
     autoHideMenuBar: true,
-    backgroundColor: nativeTheme.shouldUseDarkColors ? '#0f1115' : '#f3f4f6',
+    backgroundColor: '#0b0d11',
+    // our own top bar: Windows draws min/max/close over it in the bar's colour
+    ...(process.platform === 'win32' ? { titleBarStyle: 'hidden' as const, titleBarOverlay: { color: '#0b0d11', symbolColor: '#c4cad4', height: 48 } } : {}),
     show: false,
     webPreferences: { contextIsolation: true, nodeIntegration: false },
   });

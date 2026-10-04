@@ -9,6 +9,13 @@ export const CFG = '/tmp/system.cfg';
 export const BACKUP = '/tmp/pwm-backup.cfg';
 export const PENDING = '/tmp/pwm-pending';
 export const SOFTRESTART = '/usr/etc/rc.d/rc.softrestart';
+export const SELFTEST = '/tmp/pwm-selftest';
+
+/**
+ * Run `body` in the background so it outlives the SSH session. airOS's BusyBox has no nohup, so
+ * this uses a subshell that ignores hangup with its input and output detached, which any sh can do.
+ */
+export const bg = (body: string) => `( trap '' HUP INT TERM; ${body} ) </dev/null >/dev/null 2>&1 &`;
 
 /** system.cfg keys the app may write, and the range each value must fall in. */
 const KEYS = {
@@ -32,6 +39,7 @@ export class AirOSSsh {
     private pass: string,
     private port = 22,
     private timeoutMs = 20000,
+    private selftestWaitMs = 5000,
   ) {}
 
   /** Run one command and return stdout. Rejects on connect/auth failure or timeout. */
@@ -87,8 +95,12 @@ export class AirOSSsh {
     const keys = Object.keys(change).map((k) => KEYS[k as keyof typeof KEYS].key);
     const out = await this.run(
       `grep -E '^(${keys.map((k) => k.replace(/\./g, '\\.')).join('|')})=' ${CFG}; ` +
-        `[ -x ${SOFTRESTART} ] && echo '@SOFTRESTART'; command -v nohup >/dev/null 2>&1 && echo '@NOHUP'; [ -f ${PENDING} ] && echo '@PENDING'; echo '@END'`,
+        `[ -x ${SOFTRESTART} ] && echo '@SOFTRESTART'; [ -f ${PENDING} ] && echo '@PENDING'; rm -f ${SELFTEST}; ` +
+        `${bg(`sleep 3; echo ok > ${SELFTEST}`)} echo '@END'`,
     );
+    // prove a background job outlives the session on this radio: the undo timer depends on it
+    await new Promise((r) => setTimeout(r, this.selftestWaitMs));
+    const st = await this.run(`cat ${SELFTEST} 2>/dev/null; rm -f ${SELFTEST}`);
     const values: Record<string, string> = {};
     for (const line of out.split('\n')) {
       const m = line.match(/^([a-z0-9.]+)=(.*)$/i);
@@ -98,7 +110,7 @@ export class AirOSSsh {
     if (!out.includes('@END')) problems.push('The radio did not run the check command.');
     for (const k of keys) if (!(k in values)) problems.push(`${k} is not in ${CFG}, so this firmware stores the setting differently.`);
     if (!out.includes('@SOFTRESTART')) problems.push(`${SOFTRESTART} is missing, so the radio can't apply settings this way.`);
-    if (!out.includes('@NOHUP')) problems.push('nohup is missing, so the on-radio undo timer would not survive.');
+    if (!st.includes('ok')) problems.push('A test timer started on the radio did not survive the SSH session closing, so the on-radio undo would not run.');
     return { ok: problems.length === 0, problems, values, pendingFromEarlier: out.includes('@PENDING') };
   }
 
@@ -118,8 +130,8 @@ export class AirOSSsh {
       `cp ${CFG} ${BACKUP}`,
       ...edits,
       `echo ${token} > ${PENDING}`,
-      `nohup sh -c 'sleep ${secs}; ${undo}' >/dev/null 2>&1 </dev/null &`,
-      `nohup sh -c 'sleep 1; ${SOFTRESTART} save' >/dev/null 2>&1 </dev/null &`,
+      bg(`sleep ${secs}; ${undo}`),
+      bg(`sleep 1; ${SOFTRESTART} save`),
       `echo @APPLIED`,
     ].join('\n');
     const out = await this.run(script);
@@ -139,7 +151,7 @@ export class AirOSSsh {
   async restore(before: RadioChange): Promise<void> {
     const edits = this.edits(before);
     const out = await this.run(
-      ['set -e', `rm -f ${PENDING}`, ...edits, `nohup sh -c 'sleep 1; ${SOFTRESTART} save' >/dev/null 2>&1 </dev/null &`, 'echo @RESTORED'].join('\n'),
+      ['set -e', `rm -f ${PENDING}`, ...edits, bg(`sleep 1; ${SOFTRESTART} save`), 'echo @RESTORED'].join('\n'),
     );
     if (!out.includes('@RESTORED')) throw new SshError('The radio did not accept the old settings.');
   }

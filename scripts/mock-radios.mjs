@@ -166,7 +166,7 @@ for (const [ip, r] of Object.entries(radios)) {
             const stream = acc();
             const cmd = info.command.replaceAll('/tmp/', `${r.dir}/tmp/`).replaceAll('/usr/etc/rc.d/rc.softrestart', `${r.dir}/softrestart`);
             fs.appendFileSync(path.join(r.dir, 'log'), `$ ${info.command.split('\n').join(' ; ')}\n`);
-            execFile('sh', ['-c', cmd], (err, out) => {
+            execFile(process.env.MOCK_SH ?? 'sh', [...(process.env.MOCK_SH ? ['sh'] : []), '-c', cmd], (err, out) => {
               stream.write(out);
               stream.exit(err ? 1 : 0);
               stream.end();

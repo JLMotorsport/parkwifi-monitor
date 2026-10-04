@@ -96,11 +96,40 @@ export function App() {
   const testing = s.trial && ['checking', 'applying', 'testing'].includes(s.trial.status) ? s.trial : null;
 
   return (
-    <div className="shell">
-      <nav className="rail" aria-label="Main">
-        <div className="logo" aria-hidden>
-          <Icon name="wifi" size={20} stroke={2.2} color="#fff" />
+    <div className="app">
+      <header className="titlebar chrome">
+        <div className="brand">
+          <span className="logo" aria-hidden>
+            <Icon name="wifi" size={16} stroke={2.4} color="#fff" />
+          </span>
+          <span className="hide-sm">Park WiFi Monitor</span>
         </div>
+        <span className={`pill ${s.alerts.length ? overall : 'good'}`}>
+          <StatusIcon h={s.alerts.length ? overall : 'good'} />
+          {s.alerts.length ? [crit && `${crit} problem${crit === 1 ? '' : 's'}`, warn && `${warn} warning${warn === 1 ? '' : 's'}`].filter(Boolean).join(', ') : 'All good'}
+        </span>
+        <span className="spacer" />
+        <span className="pollinfo hide-sm">{s.polling ? 'Polling…' : `Polled ${ago(s.lastPoll, s.now)}`}</span>
+        <button className="btn icon" title={THEME_LABEL[theme]} aria-label={THEME_LABEL[theme]} onClick={() => setTheme(THEME_NEXT[theme])}>
+          <Icon name={THEME_ICON[theme]} size={16} />
+        </button>
+        <a className="btn" href="./api/export?hours=48" download title="Save the last 48 hours as one file you can send to Claude">
+          <Icon name="download" size={14} stroke={2} />
+          <span className="hide-sm">Export</span>
+        </a>
+        <button
+          className="btn primary"
+          disabled={s.polling}
+          onClick={() => {
+            api.poll().then(() => setTimeout(load, 500));
+          }}
+        >
+          Poll now
+        </button>
+      </header>
+
+      <div className="shell">
+      <nav className="rail chrome" aria-label="Main">
         {NAV.map(([k, label, icon]) => (
           <button key={k} className={`navbtn ${page === k ? 'on' : ''}`} aria-label={label} aria-current={page === k ? 'page' : undefined} onClick={() => go(k)}>
             <Icon name={icon} />
@@ -119,12 +148,6 @@ export function App() {
       <div className="page">
         <header className="topbar">
           <Crumb page={page} s={s} />
-          {page === 'dashboard' && (
-            <span className={`pill ${s.alerts.length ? overall : 'good'}`}>
-              <StatusIcon h={s.alerts.length ? overall : 'good'} />
-              {s.alerts.length ? [crit && `${crit} problem${crit === 1 ? '' : 's'}`, warn && `${warn} warning${warn === 1 ? '' : 's'}`].filter(Boolean).join(', ') : 'All good'}
-            </span>
-          )}
           {page === 'devices' && (
             <>
               <span className="faint">{enabled.length} radios</span>
@@ -160,23 +183,6 @@ export function App() {
               <input aria-label="Search" placeholder={page === 'devices' ? 'Search name or IP' : 'Search MAC, IP or AP'} value={query} onChange={(e) => setQuery(e.target.value)} />
             </label>
           )}
-          <span className="pollinfo hide-sm">{s.polling ? 'Polling…' : `Polled ${ago(s.lastPoll, s.now)}`}</span>
-          <button className="btn icon" title={THEME_LABEL[theme]} aria-label={THEME_LABEL[theme]} onClick={() => setTheme(THEME_NEXT[theme])}>
-            <Icon name={THEME_ICON[theme]} size={16} />
-          </button>
-          <a className="btn" href="./api/export?hours=48" download title="Save the last 48 hours as one file you can send to Claude">
-            <Icon name="download" size={14} stroke={2} />
-            Export
-          </a>
-          <button
-            className="btn primary"
-            disabled={s.polling}
-            onClick={() => {
-              api.poll().then(() => setTimeout(load, 500));
-            }}
-          >
-            Poll now
-          </button>
         </header>
 
         <main className="content">
@@ -223,6 +229,7 @@ export function App() {
             />
           )}
         </main>
+      </div>
       </div>
       {toastMsg && (
         <div className="toast" role="status">
