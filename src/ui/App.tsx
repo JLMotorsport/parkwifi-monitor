@@ -73,6 +73,9 @@ export function App() {
         <span className="pollinfo">
           {s.polling ? 'Polling…' : `Polled ${ago(s.lastPoll, s.now)}`}
         </span>
+        <a className="btn small" href="./api/export?hours=48" download title="Save the last 48 hours as one file you can send to Claude">
+          Export
+        </a>
         <button
           className="btn small"
           disabled={s.polling}

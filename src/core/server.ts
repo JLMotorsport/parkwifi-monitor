@@ -2,6 +2,7 @@ import http from 'http';
 import fs from 'fs';
 import path from 'path';
 import type { Monitor } from './monitor';
+import { buildExport } from './export';
 import type { Config, PublicConfig } from './types';
 
 const MIME: Record<string, string> = {
@@ -110,6 +111,17 @@ export function startServer(m: Monitor, uiDir: string, actions: AppActions = {})
             m.cfg.save();
             m.configChanged();
             return send(200, publicConfig(m));
+          }
+          case 'GET /api/export': {
+            const hours = Math.min(24 * 30, Math.max(1, Number(url.searchParams.get('hours') ?? 48)));
+            const body = JSON.stringify(buildExport(m, hours), null, 1);
+            const stamp = new Date().toISOString().slice(0, 16).replace(/[:T]/g, '-');
+            res.writeHead(200, {
+              'Content-Type': 'application/json',
+              'Content-Disposition': `attachment; filename="parkwifi-export-${stamp}-${hours}h.json"`,
+              'Cache-Control': 'no-store',
+            });
+            return res.end(body);
           }
           case 'GET /api/speedtests':
             return send(200, m.history.speedTests(url.searchParams.get('id') ?? undefined));

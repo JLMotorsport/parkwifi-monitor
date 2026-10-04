@@ -298,6 +298,23 @@ export function Settings({ s, toast, onSaved }: { s: AppState; toast: (m: string
 
       <div className="card">
         <div className="card-h">
+          <h2>Export data</h2>
+          <span className="sub">
+            One file with hourly stats for every radio, all alerts, restarts and channel changes, and each radio's latest raw data. No
+            passwords. Attach it to a Claude chat for analysis.
+          </span>
+        </div>
+        <div className="card-b row-actions">
+          {[24, 48, 168, 720].map((h) => (
+            <a key={h} className="btn small" href={`./api/export?hours=${h}`} download>
+              Last {h >= 48 ? `${h / 24} days` : '24 hours'}
+            </a>
+          ))}
+        </div>
+      </div>
+
+      <div className="card">
+        <div className="card-h">
           <h2>Access from other devices</h2>
           <span className="sub">For later, when this runs on an always-on PC. Takes effect after restarting the app.</span>
         </div>
