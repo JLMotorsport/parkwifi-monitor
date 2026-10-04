@@ -1,12 +1,15 @@
 name: Release
 
-# Two ways to ship a new version:
-#  1. Actions tab -> "Release" -> Run workflow -> pick patch/minor/major. It bumps the
-#     version, tags it, builds the Windows installer and publishes the GitHub Release.
-#  2. Push a tag like v0.2.0 yourself (package.json version must match).
+# A new version ships in any of three ways:
+#  1. A push to main whose package.json version has no release yet (bump the version in a commit).
+#  2. Actions tab -> "Release" -> Run workflow -> pick patch/minor/major (bumps and releases).
+#  3. Pushing a tag vX.Y.Z that matches package.json.
 # Installed copies pick the new release up automatically through electron-updater.
 
 on:
+  push:
+    branches: [main]
+    tags: ['v*']
   workflow_dispatch:
     inputs:
       bump:
@@ -14,8 +17,6 @@ on:
         type: choice
         options: [patch, minor, major]
         default: patch
-  push:
-    tags: ['v*']
 
 permissions:
   contents: write
@@ -25,7 +26,31 @@ concurrency:
   cancel-in-progress: false
 
 jobs:
+  decide:
+    runs-on: ubuntu-latest
+    outputs:
+      release: ${{ steps.check.outputs.release }}
+    steps:
+      - uses: actions/checkout@v4
+      - id: check
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          if [ "${{ github.event_name }}" != "push" ] || [ "${{ github.ref_type }}" = "tag" ]; then
+            echo "release=true" >> "$GITHUB_OUTPUT"; exit 0
+          fi
+          v=$(node -p "require('./package.json').version")
+          if gh release view "v$v" --repo "${{ github.repository }}" >/dev/null 2>&1; then
+            echo "v$v is already released; nothing to do"
+            echo "release=false" >> "$GITHUB_OUTPUT"
+          else
+            echo "v$v has no release yet; building it"
+            echo "release=true" >> "$GITHUB_OUTPUT"
+          fi
+
   release:
+    needs: decide
+    if: needs.decide.outputs.release == 'true'
     runs-on: windows-latest
     defaults:
       run:
@@ -48,17 +73,20 @@ jobs:
           npm run typecheck
           npm test
 
-      - name: Bump version and tag
+      - name: Bump version
         if: github.event_name == 'workflow_dispatch'
         run: |
           git config user.name "github-actions[bot]"
           git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
-          npm version ${{ inputs.bump }} -m "Release v%s"
-          git push origin HEAD:${{ github.ref_name }} --follow-tags
+          npm version ${{ inputs.bump }} --no-git-tag-version
+          git commit -am "Release v$(node -p "require('./package.json').version")"
+          git push origin HEAD:main
 
       - name: Build
         run: npm run build
 
+      # electron-builder creates the vX.Y.Z tag and release, and uploads the installer
+      # plus latest.yml, which is what the in-app updater reads.
       - name: Package and publish to GitHub Releases
         run: npx electron-builder --win --publish always
         env:

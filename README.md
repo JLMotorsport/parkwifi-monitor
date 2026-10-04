@@ -36,10 +36,11 @@ The office PC reaches `192.168.2.x` through the static route on UDR2 and the "Of
 
 ## Releasing a new version
 
-You don't need anything installed locally.
+You don't need anything installed locally. Any of these builds the Windows installer and publishes a GitHub Release, and installed copies then update themselves:
 
-- **Actions → Release → Run workflow**, choose `patch` / `minor` / `major`. The workflow bumps the version, tags it, builds the Windows installer and publishes the release. Installed copies update themselves.
-- Alternatively, push a tag `vX.Y.Z` that matches `package.json`.
+- **Bump `version` in `package.json` in a commit to `main`.** The Release workflow sees there's no release for that version yet and builds one.
+- **Actions → Release → Run workflow**, choosing `patch` / `minor` / `major`. The workflow bumps the version itself.
+- Push a tag `vX.Y.Z` that matches `package.json`.
 
 ## Running it 24/7 later
 
