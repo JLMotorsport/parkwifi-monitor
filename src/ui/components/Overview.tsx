@@ -153,7 +153,7 @@ function Node({ d, open, added }: { d: DeviceState; open: (id: string) => void; 
         </small>
       </div>
       <KV k="Ping (worst)" v={`${n(p?.avg, '')} (${n(p?.max, '')}) ms`} />
-      <KV k="Added by hop" v={added === null ? '–' : `${added > 0 ? '+' : ''}${added.toFixed(0)} ms`} />
+      <KV k="Added by hop" v={added === null ? '–' : added < 2 ? '~0 ms' : `+${added.toFixed(0)} ms`} />
       <KV k="Loss" v={n(p?.lossPct, '%')} cls="hide-sm" />
       <KV k="Up" v={r ? duration(r.uptime) : d.latest?.error ? <span className="weak">no login</span> : '–'} cls="hide-sm" />
     </div>
@@ -174,7 +174,7 @@ function Link({ wireless, text }: { wireless: boolean; text: string }) {
 function WirelessLink({ from, to }: { from: DeviceState; to: DeviceState }) {
   // the receiving station reports the link's signal, rates and airMAX figures
   const r = to.latest?.radio;
-  const a = from.latest?.radio;
+  const a = from.role === 'backbone-ap' ? from.latest?.radio : undefined;
   const cap = r?.airmaxCapacity ?? null;
   const ccq = r?.ccq ?? a?.ccq ?? null;
   const rate = r ? `${n(r.txRate)}/${n(r.rxRate)}` : '–';
@@ -192,7 +192,8 @@ function WirelessLink({ from, to }: { from: DeviceState; to: DeviceState }) {
           signal <b className={sigClass(r?.signal, -70) === 'critical' ? 'bad' : ''}>{n(r?.signal, ' dBm')}</b>
         </span>
         <span>
-          noise <b>{n(r?.noise, ' dBm')}</b> (sender {n(a?.noise, ' dBm')})
+          noise <b>{n(r?.noise, ' dBm')}</b>
+          {a && <> (sender {n(a.noise, ' dBm')})</>}
         </span>
         <span>
           CCQ <b className={ccq !== null && ccq < 90 ? 'warn' : ''}>{n(ccq, '%', 1)}</b>
@@ -256,7 +257,7 @@ export function worst(hs: H[]): H {
 function probeHealth(p?: { received: number; lossPct: number; avg: number | null }): H {
   if (!p) return 'unknown';
   if (p.received === 0) return 'critical';
-  if (p.lossPct > 5) return 'serious';
-  if ((p.avg ?? 0) > 60) return 'warning';
+  if (p.lossPct > 40) return 'serious';
+  if (p.lossPct > 20 || (p.avg ?? 0) > 60) return 'warning';
   return 'good';
 }
