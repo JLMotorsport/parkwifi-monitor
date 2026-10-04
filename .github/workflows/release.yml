@@ -1,0 +1,65 @@
+name: Release
+
+# Two ways to ship a new version:
+#  1. Actions tab -> "Release" -> Run workflow -> pick patch/minor/major. It bumps the
+#     version, tags it, builds the Windows installer and publishes the GitHub Release.
+#  2. Push a tag like v0.2.0 yourself (package.json version must match).
+# Installed copies pick the new release up automatically through electron-updater.
+
+on:
+  workflow_dispatch:
+    inputs:
+      bump:
+        description: Version bump
+        type: choice
+        options: [patch, minor, major]
+        default: patch
+  push:
+    tags: ['v*']
+
+permissions:
+  contents: write
+
+concurrency:
+  group: release
+  cancel-in-progress: false
+
+jobs:
+  release:
+    runs-on: windows-latest
+    defaults:
+      run:
+        shell: bash
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: npm
+
+      - name: Install
+        run: npm ci
+
+      - name: Typecheck and test
+        run: |
+          npm run typecheck
+          npm test
+
+      - name: Bump version and tag
+        if: github.event_name == 'workflow_dispatch'
+        run: |
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          npm version ${{ inputs.bump }} -m "Release v%s"
+          git push origin HEAD:${{ github.ref_name }} --follow-tags
+
+      - name: Build
+        run: npm run build
+
+      - name: Package and publish to GitHub Releases
+        run: npx electron-builder --win --publish always
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
