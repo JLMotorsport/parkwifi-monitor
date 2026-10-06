@@ -3,7 +3,7 @@ import fs from 'fs';
 import path from 'path';
 import type { Monitor } from './monitor';
 import { buildExport } from './export';
-import type { Config, PublicConfig } from './types';
+import type { Config, PublicConfig, PublicGateway } from './types';
 
 const MIME: Record<string, string> = {
   '.html': 'text/html; charset=utf-8',
@@ -53,8 +53,12 @@ function readBody(req: http.IncomingMessage): Promise<unknown> {
 }
 
 export function publicConfig(m: Monitor): PublicConfig {
-  const { passwordEnc, ...rest } = m.cfg.config;
-  return { ...rest, hasPassword: !!passwordEnc };
+  const { passwordEnc, gateways, ...rest } = m.cfg.config;
+  return {
+    ...rest,
+    hasPassword: !!passwordEnc,
+    gateways: (gateways ?? []).map(({ passwordEnc: pe, ...g }) => ({ ...g, hasPassword: !!pe })),
+  };
 }
 
 /**
@@ -101,10 +105,24 @@ export function startServer(m: Monitor, uiDir: string, actions: AppActions = {})
           case 'GET /api/config':
             return send(200, publicConfig(m));
           case 'PUT /api/config': {
-            const body = (await readBody(req)) as Partial<Config> & { password?: string };
+            const body = (await readBody(req)) as Omit<Partial<Config>, 'gateways'> & { password?: string; gateways?: PublicGateway[] };
             const c = m.cfg.config;
-            const allowed: (keyof Config)[] = ['username', 'speedTestPort', 'pollSeconds', 'pingCount', 'pingSize', 'devices', 'probes', 'chain', 'thresholds', 'notifications', 'retentionDays', 'server', 'sshPort', 'trialMinutes'];
+            const allowed: (keyof Config)[] = ['username', 'speedTestPort', 'pollSeconds', 'pingCount', 'pingSize', 'devices', 'probes', 'chain', 'thresholds', 'notifications', 'retentionDays', 'server', 'sshPort', 'trialMinutes', 'backboneMbps'];
             for (const k of allowed) if (body[k] !== undefined) (c as unknown as Record<string, unknown>)[k] = body[k];
+            if (Array.isArray(body.gateways)) {
+              c.gateways = body.gateways.map((g) => {
+                const old = c.gateways?.find((x) => x.id === g.id);
+                return {
+                  id: String(g.id),
+                  name: String(g.name ?? ''),
+                  host: String(g.host ?? '').trim(),
+                  username: String(g.username ?? '').trim(),
+                  passwordEnc: g.password ? m.cfg.seal(g.password) : (old?.passwordEnc ?? ''),
+                  watchPort: g.watchPort === null || g.watchPort === undefined || (g.watchPort as unknown) === '' ? null : Number(g.watchPort),
+                  enabled: !!g.enabled,
+                };
+              });
+            }
             if (typeof body.password === 'string' && body.password.length) m.cfg.setPassword(body.password);
             c.pollSeconds = Math.max(15, Number(c.pollSeconds) || 60);
             c.pingCount = Math.min(20, Math.max(1, Number(c.pingCount) || 5));
@@ -156,6 +174,8 @@ export function startServer(m: Monitor, uiDir: string, actions: AppActions = {})
             } catch (e) {
               return send(409, { error: (e as Error).message });
             }
+          case 'POST /api/gateway/test':
+            return send(200, await m.testGateway(url.searchParams.get('id') ?? ''));
           case 'POST /api/poll':
             void m.pollNow();
             return send(202, { ok: true });

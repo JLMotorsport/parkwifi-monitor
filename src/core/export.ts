@@ -103,6 +103,7 @@ export function buildExport(m: Monitor, hours: number) {
       'Hourly rows: pingAvgMs = mean of per-poll averages, pingP95Ms = 95th percentile of those, pingWorstMs = single worst reply.',
       'signalMin/ccqMin/capacityMin/txRateMin are the lowest values seen in the hour; noiseMax/clientsMax/weakClientsMax the highest.',
       'estInternetMsNow = this radio\'s ping plus the office PC\'s internet ping: an estimate of what a customer there sees, not a measurement from the radio.',
+      'gateways[].hourly: radio port = the gateway port feeding the backbone; Down = towards the caravans. Peaks are the busiest 15 s reading in each minute, then the highest of those in the hour.',
       `A client counts as weak at or below ${c.thresholds.weakSignal} dBm.`,
     ],
     settings: { ...safeConfig, server: { ...safeConfig.server, token: '(removed)' } },
@@ -117,5 +118,40 @@ export function buildExport(m: Monitor, hours: number) {
       .filter((a) => a.startedAt >= from || (a.resolvedAt ?? 0) >= from)
       .map((a) => ({ ...a, startedAt: iso(a.startedAt), resolvedAt: a.resolvedAt ? iso(a.resolvedAt) : undefined })),
     devices,
+    gateways: (c.gateways ?? []).map((g) => {
+      const rows = m.history.range('gw:' + g.id, hours).filter((s) => s.gw);
+      const byHour = new Map<number, Sample[]>();
+      for (const s of rows) {
+        const h = Math.floor(s.t / 3600000) * 3600000;
+        if (!byHour.has(h)) byHour.set(h, []);
+        byHour.get(h)!.push(s);
+      }
+      const last = rows[rows.length - 1]?.gw;
+      return {
+        id: g.id,
+        name: g.name,
+        host: g.host,
+        enabled: g.enabled,
+        watchedPort: last?.watch?.name,
+        latest: last ? { ...last, ports: last.ports } : undefined,
+        hourly: [...byHour.entries()]
+          .sort((a, b) => a[0] - b[0])
+          .map(([h, rs]) => {
+            const w = rs.map((s) => s.gw!.watch).filter((x): x is NonNullable<typeof x> => !!x);
+            const lat = nums(rs.map((s) => s.gw!.wanLatency));
+            const nets = rs[rs.length - 1].gw!.networks;
+            return compact({
+              hour: iso(h),
+              radioPortDownAvgMbps: mean(w.map((x) => x.downMbps)),
+              radioPortDownPeakMbps: max(w.map((x) => x.downPeak)),
+              radioPortUpAvgMbps: mean(w.map((x) => x.upMbps)),
+              radioPortUpPeakMbps: max(w.map((x) => x.upPeak)),
+              wanLatencyAvgMs: mean(lat),
+              wanLatencyWorstMs: max(lat),
+              clientsByNetwork: nets.map((n) => `${n.name}: ${n.clients}${n.poolSize ? '/' + n.poolSize : ''}`).join(', ') || null,
+            });
+          }),
+      };
+    }),
   };
 }

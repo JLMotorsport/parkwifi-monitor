@@ -76,8 +76,9 @@ export class HistoryStore {
     const out: Sample[] = [];
     for (let i = 0; i < rows.length; i += bucket) {
       const slice = rows.slice(i, i + bucket);
-      // keep the sample with the worst latency so spikes survive thinning
-      out.push(slice.reduce((a, b) => ((b.ping.max ?? -1) > (a.ping.max ?? -1) ? b : a)));
+      // keep the worst sample so spikes survive thinning: busiest minute for gateways, worst ping otherwise
+      const score = (s: Sample) => s.gw?.watch?.downPeak ?? s.ping.max ?? -1;
+      out.push(slice.reduce((a, b) => (score(b) > score(a) ? b : a)));
     }
     return out;
   }

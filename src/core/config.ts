@@ -52,6 +52,8 @@ export function defaultConfig(): Config {
       { id: 'udr3', name: 'House router (UDR3)', host: '192.168.4.178' },
     ],
     chain: ['house-sender', 'lookout-station', 'lookout-sender', 'mast2-station', 'monks-station'],
+    gateways: [{ id: 'udr3', name: 'House router (UDR3)', host: '192.168.4.178', username: '', passwordEnc: '', watchPort: null, enabled: false }],
+    backboneMbps: 60,
     thresholds: {
       latencyMs: 40,
       lossPct: 5,
@@ -87,6 +89,8 @@ export class ConfigStore {
         ...raw,
         thresholds: { ...def.thresholds, ...(raw.thresholds ?? {}) },
         server: { ...def.server, ...(raw.server ?? {}) },
+        gateways: raw.gateways ?? def.gateways,
+        backboneMbps: raw.backboneMbps ?? def.backboneMbps,
       };
     } catch {
       this.write(def);
@@ -108,6 +112,18 @@ export class ConfigStore {
   password(): string {
     try {
       return this.config.passwordEnc ? this.box.decrypt(this.config.passwordEnc) : '';
+    } catch {
+      return '';
+    }
+  }
+
+  /** Encrypt / decrypt any other secret (gateway passwords) with the same protection. */
+  seal(p: string) {
+    return p ? this.box.encrypt(p) : '';
+  }
+  open(enc: string) {
+    try {
+      return enc ? this.box.decrypt(enc) : '';
     } catch {
       return '';
     }

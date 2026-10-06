@@ -59,7 +59,10 @@ export function LineChart({ title, unit, data: raw, hours, threshold, min, max, 
   const x = (t: number) => PAD.l + ((t - from) / (to - from)) * (w - PAD.l - PAD.r);
   const y = (v: number) => PAD.t + (1 - (v - lo) / (hi - lo)) * (H - PAD.t - PAD.b);
 
-  // path with gaps (breaks on null or gaps longer than 5 minutes)
+  // path with gaps: breaks on null, or on a pause much longer than the usual spacing (so thinned
+  // multi-day data, one point every few minutes, still draws as a line)
+  const steps = data.slice(1).map((p, i) => p.t - data[i].t).filter((x) => x > 0).sort((a, b) => a - b);
+  const gapMs = Math.max(5 * 60 * 1000, 3 * (steps[Math.floor(steps.length / 2)] ?? 0));
   let d = '';
   let prevT = 0;
   data.forEach((p) => {
@@ -67,7 +70,7 @@ export function LineChart({ title, unit, data: raw, hours, threshold, min, max, 
       prevT = 0;
       return;
     }
-    const cmd = !prevT || p.t - prevT > 5 * 60 * 1000 ? 'M' : 'L';
+    const cmd = !prevT || p.t - prevT > gapMs ? 'M' : 'L';
     d += `${cmd}${x(p.t).toFixed(1)},${y(p.v).toFixed(1)}`;
     prevT = p.t;
   });

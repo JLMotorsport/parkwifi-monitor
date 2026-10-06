@@ -93,3 +93,23 @@ describe('advise', () => {
     expect(s.find((x) => x.kind === 'no-ip')).toBeDefined();
   });
 });
+
+describe('gateway advice', () => {
+  const stats = (clients: number) => ({
+    name: 'UDR3', model: 'UDR', uptime: 1, cpu: 1, mem: 1, wanLatency: 12, wanUp: true, wanDownMbps: 1, wanUpMbps: 1, ports: [],
+    networks: [{ name: 'Lookout&Monks', subnet: '192.168.2.1/24', clients, poolSize: 100, leaseSeconds: 86400 }],
+  });
+  const gw = (clients: number, peak: number | null, samples = 500) => ({ id: 'gw:udr3', name: 'UDR3', stats: stats(clients), peakDown95: peak, peakUp95: 1, samples, capacity: 60 });
+  const go = (g: ReturnType<typeof gw>) => advise({ devices: [], chain: [], events: [], thresholds: th, now: 1e12, gateway: g });
+  it('warns when the DHCP pool is nearly full and suggests shorter leases', () => {
+    const s = go(gw(90, null)).find((x) => x.kind === 'dhcp-full')!;
+    expect(s.severity).toBe('warning');
+    expect(s.fix).toContain('24 hours');
+    expect(go(gw(50, null)).find((x) => x.kind === 'dhcp-full')).toBeUndefined();
+  });
+  it('calls the backbone full only with enough history', () => {
+    expect(go(gw(10, 55)).find((x) => x.kind === 'backbone-full')?.title).toContain('nearly full');
+    expect(go(gw(10, 55, 100)).find((x) => x.kind === 'backbone-full')).toBeUndefined();
+    expect(go(gw(10, 30)).find((x) => x.kind === 'backbone-full')).toBeUndefined();
+  });
+});

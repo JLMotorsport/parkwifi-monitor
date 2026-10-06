@@ -58,6 +58,60 @@ export interface Config {
   sshPort?: number;
   /** how long a change is trialled before it is kept or undone (minutes, default 10) */
   trialMinutes?: number;
+  /** UniFi gateways read for traffic, internet latency and DHCP (UDR3 first) */
+  gateways?: GatewayCfg[];
+  /** real-world throughput the house to Lookout backbone can carry, in Mbps */
+  backboneMbps?: number;
+}
+
+export interface GatewayCfg {
+  id: string;
+  name: string;
+  /** address the app reaches the gateway's web interface on */
+  host: string;
+  username: string;
+  /** encrypted like the radio password */
+  passwordEnc: string;
+  /** port_idx on the gateway that feeds the radios; null = pick by name (Lookout/Monks) */
+  watchPort: number | null;
+  enabled: boolean;
+}
+
+export interface GatewayPort {
+  idx: number;
+  name: string;
+  up: boolean;
+  speed: number | null;
+  /** Mbps out of the gateway on this port: towards the caravans, i.e. their downloads */
+  txMbps: number | null;
+  /** Mbps into the gateway on this port: the caravans' uploads */
+  rxMbps: number | null;
+}
+
+export interface GatewayNetwork {
+  name: string;
+  subnet: string;
+  clients: number;
+  /** addresses in the DHCP range, null when DHCP is off on this network */
+  poolSize: number | null;
+  leaseSeconds: number | null;
+}
+
+export interface GatewayStats {
+  name: string;
+  model: string;
+  uptime: number | null;
+  cpu: number | null;
+  mem: number | null;
+  /** the gateway's own measurement of internet latency */
+  wanLatency: number | null;
+  wanUp: boolean | null;
+  wanDownMbps: number | null;
+  wanUpMbps: number | null;
+  ports: GatewayPort[];
+  networks: GatewayNetwork[];
+  /** the radio-feeding port over the last minute: average and busiest 15 s reading */
+  watch?: { idx: number; name: string; downMbps: number; upMbps: number; downPeak: number; upPeak: number; readings: number };
 }
 
 export interface PingResult {
@@ -116,6 +170,8 @@ export interface Sample {
   ping: PingResult;
   radio?: RadioStatus;
   stations?: { count: number; weak: number; avgSignal: number | null; worstSignal: number | null; noIp: number };
+  /** present on gateway samples (id `gw:<gateway id>`) */
+  gw?: GatewayStats;
   error?: string;
 }
 
@@ -155,7 +211,7 @@ export interface RadioChange {
   frequency?: number;
 }
 
-export type SuggestionKind = 'channel' | 'power' | 'noise' | 'restarts' | 'no-ip' | 'weak-clients' | 'backbone-link' | 'slow-hop' | 'login';
+export type SuggestionKind = 'channel' | 'power' | 'noise' | 'restarts' | 'no-ip' | 'weak-clients' | 'backbone-link' | 'slow-hop' | 'login' | 'dhcp-full' | 'backbone-full';
 
 export interface Suggestion {
   /** stable across polls: `<kind>:<deviceId>` */
@@ -225,12 +281,17 @@ export interface AppState {
   /** device id currently running a speed test, if any */
   speedTestRunning: string | null;
   suggestions: Suggestion[];
+  gateways: { cfg: PublicGateway; latest?: Sample; error?: string; errorAt?: number; load?: { peakDown95: number | null; peakUp95: number | null; samples: number } }[];
+  backboneMbps: number;
   trial: ChangeTrial | null;
   changes: ChangeTrial[];
 }
 
-export interface PublicConfig extends Omit<Config, 'passwordEnc'> {
+export type PublicGateway = Omit<GatewayCfg, 'passwordEnc'> & { hasPassword: boolean; password?: string };
+
+export interface PublicConfig extends Omit<Config, 'passwordEnc' | 'gateways'> {
   hasPassword: boolean;
+  gateways: PublicGateway[];
 }
 
 export interface SpeedTestRecord {

@@ -1,7 +1,7 @@
 // Turns the latest readings into plain-English suggestions. Pure: no I/O, fully unit tested.
 // Only access-point power and channel changes carry a `change` the app may apply itself;
 // everything on the backbone stays advice, because a bad change there cuts off the app too.
-import type { AlertItem, DeviceState, Severity, Suggestion, Thresholds } from './types';
+import type { AlertItem, DeviceState, GatewayStats, Severity, Suggestion, Thresholds } from './types';
 
 export interface AdvisorInput {
   devices: DeviceState[];
@@ -9,7 +9,21 @@ export interface AdvisorInput {
   events: AlertItem[];
   thresholds: Thresholds;
   now: number;
+  gateway?: {
+    id: string;
+    name: string;
+    stats?: GatewayStats;
+    /** 95th percentile of each minute's busiest 15 s, over the last 3 days (Mbps) */
+    peakDown95: number | null;
+    peakUp95: number | null;
+    samples: number;
+    /** what the backbone can really carry (Mbps), from Settings */
+    capacity: number;
+  };
 }
+
+/** Minutes of gateway history needed before calling the backbone full (about 6 hours). */
+export const MIN_LOAD_SAMPLES = 360;
 
 /** Non-overlapping 2.4 GHz channels. */
 export const PLAN = [1, 6, 11] as const;
@@ -202,6 +216,40 @@ export function advise(inp: AdvisorInput): Suggestion[] {
           fix: `Move this link to a 5 GHz channel well away from any other link on the same mast, and if two radios share that mast, put more distance or a metal plate between them. Backbone changes are left to you.`,
         });
       }
+    }
+  }
+
+  // ---- gateway: DHCP pool and backbone load ----
+  const g = inp.gateway;
+  if (g?.stats) {
+    for (const n of g.stats.networks) {
+      if (!n.poolSize || n.clients < 0.85 * n.poolSize) continue;
+      const hrs = n.leaseSeconds ? Math.round(n.leaseSeconds / 3600) : null;
+      out.push({
+        id: `dhcp-full:${g.id}:${n.name}`,
+        kind: 'dhcp-full',
+        deviceId: g.id,
+        deviceName: g.name,
+        severity: n.clients >= n.poolSize ? 'serious' : 'warning',
+        title: `${n.name} is running out of addresses`,
+        why: `${n.clients} devices are active on a DHCP range of ${n.poolSize}${hrs ? `, with ${hrs}-hour leases` : ''}. When it fills, new phones connect to the WiFi but never get an address, and show "no internet".`,
+        fix: `In UniFi, open the ${n.name} network: widen the DHCP range${hrs && hrs > 4 ? ` and cut the lease time from ${hrs} hours to 2 to 4 hours, so addresses from phones that have left come back quickly` : ''}.`,
+      });
+    }
+  }
+  if (g && g.peakDown95 !== null && g.samples >= MIN_LOAD_SAMPLES && g.capacity > 0) {
+    const pct = Math.round((g.peakDown95 / g.capacity) * 100);
+    if (pct >= 80) {
+      out.push({
+        id: `backbone-full:${g.id}`,
+        kind: 'backbone-full',
+        deviceId: g.id,
+        deviceName: g.name,
+        severity: pct >= 95 ? 'serious' : 'warning',
+        title: `The backbone is nearly full at busy times`,
+        why: `At its busiest, traffic to Lookout & Monks reaches ${g.peakDown95} Mbps (95th percentile of the last 3 days), ${pct}% of the ${g.capacity} Mbps the link can really carry. Everyone beyond the house shares that.`,
+        fix: `Splitting the load helps here: a second feed for Mast 2 and Monks (Starlink at Monks, say) would take their share off this link. Per-device speed limits on UDR3 also stop a few heavy users filling it.`,
+      });
     }
   }
 

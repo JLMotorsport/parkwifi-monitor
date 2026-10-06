@@ -21,6 +21,7 @@ export const api = {
   changeStart: (suggestion: string) => j<ChangeTrial>('./api/change/start', { method: 'POST', body: JSON.stringify({ suggestion }) }),
   changeKeep: () => j<ChangeTrial>('./api/change/keep', { method: 'POST' }),
   changeUndo: () => j<ChangeTrial>('./api/change/undo', { method: 'POST' }),
+  testGateway: (id: string) => j<{ ok: boolean; message: string; ports: { idx: number; name: string; up: boolean }[] }>(`./api/gateway/test?id=${encodeURIComponent(id)}`, { method: 'POST' }),
   checkUpdate: () => j('./api/app/check-update', { method: 'POST' }),
   installUpdate: () => j('./api/app/install-update', { method: 'POST' }),
   autostart: (on: boolean) => j('./api/app/autostart', { method: 'POST', body: JSON.stringify({ on }) }),

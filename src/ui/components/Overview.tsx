@@ -2,10 +2,11 @@ import type { AppState, DeviceState } from '../../core/types';
 import { accessPoints, chainDevices, estInternet, goodShare, probeHealth, shareHealth } from '../derive';
 import { duration, n } from '../format';
 import { AlertList } from './Alerts';
+import { BackboneLoad } from './BackboneLoad';
 import { Icon } from './Icon';
 import { HEALTH_LABEL, StatusIcon, worst, type Health } from './Pill';
 
-type Page = 'devices' | 'clients' | 'alerts';
+type Page = 'devices' | 'clients' | 'alerts' | 'settings';
 
 interface Props {
   s: AppState;
@@ -90,6 +91,8 @@ export function Overview({ s, open, goto, latencyLimit }: Props) {
         </div>
         <Topology s={s} chain={chain} open={open} latencyLimit={latencyLimit} />
       </section>
+
+      <BackboneLoad s={s} goSettings={() => goto('settings')} />
 
       <div className="row2">
         <section className="card" style={{ flex: '2 1 560px' }}>
@@ -228,9 +231,18 @@ function Topology({ s, chain, open, latencyLimit }: { s: AppState; chain: Device
                 <span className="ip">{p.probe.host}</span>
               </div>
               <div className={`lat ink-${h === 'good' ? 'unknown' : h}`}>{n(p.latest?.ping.avg, ' ms')}</div>
-              <div className="net" title="Estimate: this router's ping plus this PC's internet ping">
-                Internet ≈ {estInternet(s, p.latest?.ping)?.ms ?? '–'} ms
-              </div>
+              {(() => {
+                const gw = s.gateways.find((g) => g.cfg.id === p.probe.id && g.cfg.enabled)?.latest?.gw;
+                return gw?.wanLatency != null ? (
+                  <div className="net" title="Measured by the router itself">
+                    Internet {gw.wanLatency} ms (measured)
+                  </div>
+                ) : (
+                  <div className="net" title="Estimate: this router's ping plus this PC's internet ping">
+                    Internet ≈ {estInternet(s, p.latest?.ping)?.ms ?? '–'} ms
+                  </div>
+                );
+              })()}
             </div>,
             <div className="tlink" key={p.probe.id + '-l'}>
               <span className="add" />

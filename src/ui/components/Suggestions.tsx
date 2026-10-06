@@ -40,9 +40,13 @@ export function SuggestionsPage({ s, open, toast }: { s: AppState; open: (id: st
             <b>{x.title}</b>
             <span className={`tag ink-${sevHealth(x.severity)}`}>{SEV_LABEL[x.severity]}</span>
           </div>
-          <button className="linkbtn" onClick={() => open(x.deviceId)}>
-            {x.deviceName}
-          </button>
+          {x.deviceId.startsWith('gw:') ? (
+            <span className="faint">{x.deviceName}</span>
+          ) : (
+            <button className="linkbtn" onClick={() => open(x.deviceId)}>
+              {x.deviceName}
+            </button>
+          )}
           <p className="why">{x.why}</p>
           <p className="fix">
             <b>Fix:</b> {x.fix}

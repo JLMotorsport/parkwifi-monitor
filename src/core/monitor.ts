@@ -4,6 +4,7 @@ import { advise, isAccessPoint } from './advisor';
 import { AirOSSsh } from './airos-ssh';
 import { AlertEngine, roleOf } from './alerts';
 import { ChangeManager } from './changes';
+import { GatewayPoller } from './gateway';
 import { ConfigStore, SecretBox, slug } from './config';
 import { ping } from './ping';
 import { HistoryStore } from './store';
@@ -44,6 +45,9 @@ export class Monitor extends EventEmitter {
   polling = false;
   speedTestRunning: string | null = null;
   readonly changes: ChangeManager;
+  private gateways = new Map<string, GatewayPoller>();
+  private gwLatest = new Map<string, Sample>();
+  private lastAdvice: ReturnType<Monitor['adviceInput']> | null = null;
 
   constructor(dataDir: string, box: SecretBox, readonly version: string, public hooks: MonitorHooks = {}) {
     super();
@@ -87,16 +91,72 @@ export class Monitor extends EventEmitter {
   }
 
   suggestions() {
-    return advise({ devices: this.deviceStates(), chain: this.cfg.config.chain, events: this.events, thresholds: this.cfg.config.thresholds, now: Date.now() });
+    return advise(this.adviceInput(this.deviceStates()));
+  }
+
+  private adviceInput(devices: DeviceState[]) {
+    const c = this.cfg.config;
+    const g = c.gateways?.find((x) => x.enabled);
+    let gateway;
+    if (g) {
+      const latest = this.gwLatest.get(g.id)?.gw;
+      // busiest minutes over the last three days, so one odd evening doesn't decide it
+      const peaks = this.history
+        .range('gw:' + g.id, 72, Number.MAX_SAFE_INTEGER)
+        .map((s) => s.gw?.watch)
+        .filter((w): w is NonNullable<typeof w> => !!w);
+      const p95 = (xs: number[]) => (xs.length ? [...xs].sort((a, b) => a - b)[Math.min(xs.length - 1, Math.floor(xs.length * 0.95))] : null);
+      gateway = {
+        id: 'gw:' + g.id,
+        name: g.name,
+        stats: latest,
+        peakDown95: p95(peaks.map((w) => w.downPeak)),
+        peakUp95: p95(peaks.map((w) => w.upPeak)),
+        samples: peaks.length,
+        capacity: c.backboneMbps ?? 60,
+      };
+    }
+    return { devices, chain: c.chain, events: this.events, thresholds: c.thresholds, now: Date.now(), gateway };
+  }
+
+  /** Start, restart or stop gateway pollers to match the config. */
+  private syncGateways() {
+    const cfgs = this.cfg.config.gateways ?? [];
+    for (const [id, p] of this.gateways) {
+      if (!cfgs.some((g) => g.id === id)) {
+        p.stop();
+        this.gateways.delete(id);
+      }
+    }
+    for (const g of cfgs) {
+      let p = this.gateways.get(g.id);
+      if (!p) {
+        const cur = g;
+        p = new GatewayPoller(cur, () => this.cfg.open(this.cfg.config.gateways?.find((x) => x.id === cur.id)?.passwordEnc ?? ''), () => this.emit('change'));
+        this.gateways.set(g.id, p);
+        const prev = this.history.previous('gw:' + g.id);
+        if (prev) this.gwLatest.set(g.id, prev);
+      }
+      p.cfg = g;
+      p.start();
+    }
+  }
+
+  async testGateway(id: string) {
+    const p = this.gateways.get(id);
+    if (!p) return { ok: false, message: 'Unknown gateway', ports: [] };
+    return p.test();
   }
 
   start() {
     this.schedule(2000);
+    this.syncGateways();
     void this.changes.recover();
   }
 
   stop() {
     this.changes.shutdown();
+    for (const p of this.gateways.values()) p.stop();
     if (this.timer) clearTimeout(this.timer);
     this.timer = null;
   }
@@ -141,6 +201,13 @@ export class Monitor extends EventEmitter {
         this.latest.set(s.id, s);
         samples.push(s);
       });
+      for (const [id, p] of this.gateways) {
+        const s = p.flush(t);
+        if (s) {
+          this.gwLatest.set(id, s);
+          samples.push(s);
+        }
+      }
       this.history.add(samples);
       this.events = this.events.slice(0, 300);
       this.lastPoll = t;
@@ -241,7 +308,15 @@ export class Monitor extends EventEmitter {
       autostart: this.hooks.autostart?.() ?? null,
       needsSetup: !this.cfg.password(),
       speedTestRunning: this.speedTestRunning,
-      suggestions: advise({ devices, chain: c.chain, events: this.events, thresholds: c.thresholds, now: Date.now() }),
+      suggestions: advise((this.lastAdvice = this.adviceInput(devices))),
+      gateways: (c.gateways ?? []).map((g) => {
+        const { passwordEnc, ...rest } = g;
+        const p = this.gateways.get(g.id);
+        const adv = this.lastAdvice?.gateway;
+        const load = adv && adv.id === 'gw:' + g.id ? { peakDown95: adv.peakDown95, peakUp95: adv.peakUp95, samples: adv.samples } : undefined;
+        return { cfg: { ...rest, hasPassword: !!passwordEnc }, latest: this.gwLatest.get(g.id), error: p?.error || undefined, errorAt: p?.errorAt || undefined, load };
+      }),
+      backboneMbps: c.backboneMbps ?? 60,
       trial: this.changes.trial,
       changes: this.changes.history.slice(0, 20),
     };
@@ -346,6 +421,7 @@ export class Monitor extends EventEmitter {
     const ids = new Set(this.cfg.config.devices.filter((d) => d.enabled).map((d) => d.id));
     for (const a of [...this.alerts.active.values()]) if (!ids.has(a.deviceId)) this.alerts.forget(a.deviceId);
     this.clients.clear();
+    this.syncGateways();
     if (!this.polling) this.schedule(1500);
     this.emit('change');
   }

@@ -178,3 +178,57 @@ for (const [ip, r] of Object.entries(radios)) {
   });
   server.listen(22, ip, () => console.log('mock ssh', ip));
 }
+
+// ---- UniFi OS gateway (UDR3) on 127.0.0.178 --------------------------------------------------
+{
+  const ip = '127.0.0.178';
+  const start = Date.now();
+  let lastT = start;
+  const ctr = { p3rx: 0, p3tx: 0, wrx: 0, wtx: 0 };
+  const tick = () => {
+    const now = Date.now();
+    const dt = (now - lastT) / 1000;
+    lastT = now;
+    const burst = Math.random() < 0.15 ? 2.5 : 1;
+    const down = (14 + Math.random() * 16) * burst; // Mbps towards the caravans
+    const up = 1.5 + Math.random() * 3;
+    ctr.p3tx += (down * 1e6 * dt) / 8;
+    ctr.p3rx += (up * 1e6 * dt) / 8;
+    ctr.wrx += ((down + 20) * 1e6 * dt) / 8;
+    ctr.wtx += ((up + 3) * 1e6 * dt) / 8;
+  };
+  const send = (res, data) => { res.writeHead(200, { 'Content-Type': 'application/json' }); res.end(JSON.stringify({ meta: { rc: 'ok' }, data })); };
+  https.createServer(tls, (req, res) => {
+    let body = '';
+    req.on('data', (c) => (body += c));
+    req.on('end', () => {
+      if (req.method === 'POST' && req.url === '/api/auth/login') {
+        const b = JSON.parse(body || '{}');
+        if (b.username !== USER || b.password !== PASS) { res.writeHead(401); return res.end('{}'); }
+        res.writeHead(200, { 'Set-Cookie': 'TOKEN=mocktoken; Path=/; HttpOnly', 'X-CSRF-Token': 'csrf123', 'Content-Type': 'application/json' });
+        return res.end('{}');
+      }
+      if (!(req.headers.cookie ?? '').includes('TOKEN=mocktoken')) { res.writeHead(401); return res.end('{}'); }
+      const p = req.url.replace('/proxy/network/api/s/default/', '');
+      tick();
+      if (p === 'stat/health') return send(res, [{ subsystem: 'www', status: 'ok', latency: Math.round(11 + Math.random() * 6) }, { subsystem: 'wan', status: 'ok' }]);
+      if (p === 'stat/device') return send(res, [{
+        type: 'udm', model: 'UDR', name: 'UDR3 House', uptime: 864000 + Math.round((Date.now() - start) / 1000), 'system-stats': { cpu: '9.1', mem: '58.2' },
+        port_table: [
+          { port_idx: 1, name: 'Port 1', up: true, speed: 1000, rx_bytes: 1000, tx_bytes: 1000 },
+          { port_idx: 2, name: 'House LAN', up: true, speed: 1000, rx_bytes: 5000, tx_bytes: 9000 },
+          { port_idx: 3, name: 'Lookout&Monks', up: true, speed: 100, rx_bytes: Math.round(ctr.p3rx), tx_bytes: Math.round(ctr.p3tx) },
+          { port_idx: 4, name: 'Port 4', up: false, speed: 0, rx_bytes: 0, tx_bytes: 0 },
+        ],
+        wan1: { rx_bytes: Math.round(ctr.wrx), tx_bytes: Math.round(ctr.wtx) },
+      }]);
+      if (p === 'rest/networkconf') return send(res, [
+        { _id: 'n1', name: 'Lookout&Monks', purpose: 'corporate', ip_subnet: '192.168.2.1/24', dhcpd_enabled: true, dhcpd_start: '192.168.2.100', dhcpd_stop: '192.168.2.199', dhcpd_leasetime: 86400 },
+        { _id: 'n2', name: 'House', purpose: 'corporate', ip_subnet: '192.168.10.1/24', dhcpd_enabled: true, dhcpd_start: '192.168.10.6', dhcpd_stop: '192.168.10.254', dhcpd_leasetime: 86400 },
+        { _id: 'w1', name: 'Internet 1', purpose: 'wan' },
+      ]);
+      if (p === 'stat/sta') return send(res, [...Array(91).fill({ network_id: 'n1' }), ...Array(14).fill({ network_id: 'n2' })]);
+      res.writeHead(404); res.end('{}');
+    });
+  }).listen(443, ip, () => console.log('mock UniFi gateway', ip));
+}

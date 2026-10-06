@@ -1,5 +1,5 @@
 import { useEffect, useState } from 'react';
-import type { AppState, DeviceCfg, PublicConfig, Role } from '../../core/types';
+import type { AppState, DeviceCfg, PublicConfig, PublicGateway, Role } from '../../core/types';
 import { api } from '../api';
 import type { Theme } from '../derive';
 import { roleLabel } from '../format';
@@ -9,6 +9,7 @@ export function Settings({ s, toast, onSaved, theme, setTheme }: { s: AppState; 
   const [password, setPassword] = useState('');
   const [busy, setBusy] = useState('');
   const [tests, setTests] = useState<Record<string, string>>({});
+  const [gwTest, setGwTest] = useState<Record<string, { ok: boolean; message: string; ports: { idx: number; name: string; up: boolean }[] }>>({});
 
   useEffect(() => {
     api.config().then(setC).catch((e) => toast(String(e)));
@@ -18,12 +19,14 @@ export function Settings({ s, toast, onSaved, theme, setTheme }: { s: AppState; 
 
   const set = <K extends keyof PublicConfig>(k: K, v: PublicConfig[K]) => setC({ ...c, [k]: v });
   const th = <K extends keyof PublicConfig['thresholds']>(k: K, v: number) => set('thresholds', { ...c.thresholds, [k]: v });
+  const gwSet = (i: number, patch: Partial<PublicGateway>) => set('gateways', c.gateways.map((g, j) => (j === i ? { ...g, ...patch } : g)));
   const dev = (i: number, patch: Partial<DeviceCfg>) => set('devices', c.devices.map((d, j) => (j === i ? { ...d, ...patch } : d)));
 
   const save = async () => {
     setBusy('save');
     try {
       const out = await api.saveConfig({ ...c, ...(password ? { password } : {}) });
+      for (const g of c.gateways) if (g.password) g.password = '';
       setC(out);
       setPassword('');
       toast('Saved. Polling again now.');
@@ -93,6 +96,69 @@ export function Settings({ s, toast, onSaved, theme, setTheme }: { s: AppState; 
           </label>
         </div>
       </div>
+
+      {c.gateways.map((g, i) => {
+        const t = gwTest[g.id];
+        return (
+          <div className="card" key={g.id}>
+            <div className="card-h">
+              <h2>{g.name}</h2>
+              <span className="sub">
+                Read-only: traffic on the port that feeds the radios, the router's own internet latency, and DHCP use. Needs a local UniFi account
+                (UniFi OS: Admins and Users, local access only), not your ui.com login.
+              </span>
+            </div>
+            <div className="card-b form">
+              <label className="chk">
+                <input type="checkbox" checked={g.enabled} onChange={(e) => gwSet(i, { enabled: e.target.checked })} /> Read this router
+              </label>
+              <label className="f">
+                Address
+                <input className="mono" value={g.host} onChange={(e) => gwSet(i, { host: e.target.value.trim() })} />
+              </label>
+              <label className="f">
+                Local username
+                <input value={g.username} onChange={(e) => gwSet(i, { username: e.target.value })} />
+              </label>
+              <label className="f">
+                Password {g.hasPassword && <span className="faint">(saved; leave blank to keep)</span>}
+                <input type="password" value={g.password ?? ''} placeholder={g.hasPassword ? '••••••••' : 'required'} onChange={(e) => gwSet(i, { password: e.target.value })} />
+              </label>
+              <label className="f">
+                Port that feeds the radios
+                <select value={g.watchPort ?? ''} onChange={(e) => gwSet(i, { watchPort: e.target.value === '' ? null : Number(e.target.value) })}>
+                  <option value="">Auto (port named Lookout or Monks)</option>
+                  {(t?.ports ?? (g.watchPort !== null ? [{ idx: g.watchPort, name: `Port ${g.watchPort}`, up: true }] : [])).map((p) => (
+                    <option key={p.idx} value={p.idx}>
+                      {p.name}
+                      {p.up ? '' : ' (down)'}
+                    </option>
+                  ))}
+                </select>
+              </label>
+              <label className="f">
+                Backbone can really carry (Mbps)
+                <input type="number" value={c.backboneMbps ?? 60} onChange={(e) => set('backboneMbps', Number(e.target.value))} />
+              </label>
+            </div>
+            <div className="card-b row-actions">
+              <button
+                className="btn small"
+                disabled={!!busy}
+                onClick={async () => {
+                  setGwTest((x) => ({ ...x, [g.id]: { ok: false, message: 'Saving and testing…', ports: x[g.id]?.ports ?? [] } }));
+                  await save();
+                  const r = await api.testGateway(g.id).catch((e) => ({ ok: false, message: String(e), ports: [] }));
+                  setGwTest((x) => ({ ...x, [g.id]: r }));
+                }}
+              >
+                Save and test
+              </button>
+              {t && <span className={`hint ${t.ok ? 'ink-good' : 'weak'}`}>{t.message}</span>}
+            </div>
+          </div>
+        );
+      })}
 
       <div className="card">
         <div className="card-h">
