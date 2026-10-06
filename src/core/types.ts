@@ -121,6 +121,8 @@ export interface PingResult {
   avg: number | null;
   min: number | null;
   max: number | null;
+  /** how it was measured when not ordinary ping: 'tcp:443' = time to open a connection to that port */
+  via?: string;
 }
 
 export interface Station {

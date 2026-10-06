@@ -230,7 +230,13 @@ function Topology({ s, chain, open, latencyLimit }: { s: AppState; chain: Device
               <div className="ips">
                 <span className="ip">{p.probe.host}</span>
               </div>
-              <div className={`lat ink-${h === 'good' ? 'unknown' : h}`}>{n(p.latest?.ping.avg, ' ms')}</div>
+              <div
+                className={`lat ${h === 'good' ? '' : 'ink-' + h}`}
+                title={p.latest?.ping.via ? `It doesn't answer ping, so this is the time to open a connection to its web port (${p.latest.ping.via.replace('tcp:', '')}).` : undefined}
+              >
+                {n(p.latest?.ping.avg, ' ms')}
+                {p.latest?.ping.via && <span className="faint" style={{ fontWeight: 400 }}> (web)</span>}
+              </div>
               {(() => {
                 const gw = s.gateways.find((g) => g.cfg.id === p.probe.id && g.cfg.enabled)?.latest?.gw;
                 return gw?.wanLatency != null ? (

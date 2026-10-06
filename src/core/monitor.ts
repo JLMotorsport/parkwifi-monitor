@@ -6,7 +6,7 @@ import { AlertEngine, roleOf } from './alerts';
 import { ChangeManager } from './changes';
 import { GatewayPoller } from './gateway';
 import { ConfigStore, SecretBox, slug } from './config';
-import { ping } from './ping';
+import { ping, reach } from './ping';
 import { HistoryStore } from './store';
 import type { AlertItem, AppState, DeviceCfg, DeviceState, Sample, SpeedTestRecord, Station, UpdateInfo } from './types';
 
@@ -197,7 +197,7 @@ export class Monitor extends EventEmitter {
         samples.push(s);
       });
       await pool(c.probes, 4, async (pr) => {
-        const s: Sample = { t, id: 'probe:' + pr.id, ping: await ping(pr.host, c.pingCount, 56) };
+        const s: Sample = { t, id: 'probe:' + pr.id, ping: await reach(pr.host, c.pingCount, 56) };
         this.latest.set(s.id, s);
         samples.push(s);
       });

@@ -1,4 +1,5 @@
 import { execFile } from 'child_process';
+import net from 'net';
 import type { PingResult } from './types';
 
 /**
@@ -43,4 +44,47 @@ export function parsePing(out: string, sent: number): PingResult {
     min: Math.min(...times),
     max: Math.max(...times),
   };
+}
+
+/** Time to open (or be refused) a TCP connection: a round trip, for hosts that ignore ping. */
+function connectMs(host: string, port: number, timeoutMs: number): Promise<number | null> {
+  return new Promise((resolve) => {
+    const t0 = process.hrtime.bigint();
+    const done = (ok: boolean) => {
+      sock.destroy();
+      resolve(ok ? Math.round(Number(process.hrtime.bigint() - t0) / 1e5) / 10 : null);
+    };
+    const sock = net.connect({ host, port });
+    sock.setTimeout(timeoutMs);
+    sock.once('connect', () => done(true));
+    // a refusal still proves the host answered, and arrives after one round trip
+    sock.once('error', (e: NodeJS.ErrnoException) => done(e.code === 'ECONNREFUSED'));
+    sock.once('timeout', () => done(false));
+  });
+}
+
+export async function tcpPing(host: string, port: number, count: number, timeoutMs = 1500): Promise<PingResult> {
+  const times: number[] = [];
+  for (let i = 0; i < count; i++) {
+    const ms = await connectMs(host, port, timeoutMs);
+    if (ms !== null) times.push(ms);
+  }
+  const received = times.length;
+  const base = { sent: count, received, lossPct: Math.round(((count - received) / count) * 1000) / 10, via: `tcp:${port}` };
+  if (!received) return { ...base, avg: null, min: null, max: null };
+  return { ...base, avg: Math.round((times.reduce((a, b) => a + b, 0) / received) * 10) / 10, min: Math.min(...times), max: Math.max(...times) };
+}
+
+/**
+ * Ping, and if nothing answers, try opening a connection to its web ports instead. Routers often
+ * drop ping from outside while still being perfectly reachable; only call it down if both fail.
+ */
+export async function reach(host: string, count: number, size: number): Promise<PingResult> {
+  const p = await ping(host, count, size);
+  if (p.received > 0) return p;
+  for (const port of [443, 80]) {
+    const t = await tcpPing(host, port, Math.min(count, 3));
+    if (t.received > 0) return t;
+  }
+  return p;
 }
