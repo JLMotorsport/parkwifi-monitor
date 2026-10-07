@@ -224,6 +224,7 @@ function TrialCard({ t, now, toast }: { t: ChangeTrial; now: number; toast: (m: 
                   <th className="r">Loss</th>
                   <th className="r">Devices</th>
                   <th className="r">Noise</th>
+                  <th className="r">CCQ</th>
                   <th className="r">Setting</th>
                 </tr>
               </thead>
@@ -261,6 +262,7 @@ function StatsRow({ label, s, t }: { label: string; s: TrialStats; t: ChangeTria
       <td className="r">{v(s.lossAvg, '%')}</td>
       <td className="r">{v(s.clients, '')}</td>
       <td className="r">{v(s.noise, ' dBm')}</td>
+      <td className="r">{v(s.ccq ?? null, '%')}</td>
       <td className="r">{t.change.txPower != null ? v(s.txPower, ' dBm') : s.frequency != null ? `ch ${(s.frequency - 2407) / 5}` : '–'}</td>
     </tr>
   );

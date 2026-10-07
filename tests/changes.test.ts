@@ -5,7 +5,7 @@ import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { ChangeManager, evaluate, stats, type TrialHost } from '../src/core/changes';
 import type { RadioChange, Sample, Suggestion, TrialStats } from '../src/core/types';
 
-const base: TrialStats = { samples: 10, reachablePct: 100, pingAvg: 10, lossAvg: 0, clients: 5, noise: -85, txPower: 20, frequency: 2432 };
+const base: TrialStats = { samples: 10, reachablePct: 100, pingAvg: 10, lossAvg: 0, clients: 5, noise: -85, ccq: 70, txPower: 20, frequency: 2432 };
 
 describe('evaluate', () => {
   it('passes a power change that took effect and broke nothing', () => {
@@ -20,6 +20,11 @@ describe('evaluate', () => {
   });
   it('fails a channel that is noisier', () => {
     expect(evaluate({ frequency: 2437 }, base, { ...base, frequency: 2437, noise: -80 }).find((x) => !x.ok)?.name).toBe('Channel no noisier');
+  });
+  it('fails a channel where the link quality dropped, and ignores CCQ for power changes', () => {
+    expect(evaluate({ frequency: 2437 }, base, { ...base, frequency: 2437, ccq: 58 }).find((x) => !x.ok)?.name).toBe('Link quality no worse');
+    expect(evaluate({ frequency: 2437 }, base, { ...base, frequency: 2437, ccq: 90 }).find((x) => x.name === 'Link quality no worse')?.detail).toContain('better');
+    expect(evaluate({ txPower: 17 }, base, { ...base, txPower: 17, ccq: 40 }).every((x) => x.ok)).toBe(true);
   });
   it('fails when ping or loss got worse, or the radio dropped out', () => {
     expect(evaluate({ txPower: 17 }, base, { ...base, txPower: 17, pingAvg: 40 }).some((x) => !x.ok)).toBe(true);
@@ -46,6 +51,13 @@ describe('stats', () => {
     expect(s.reachablePct).toBe(67);
     expect(s.txPower).toBe(17);
     expect(s.clients).toBe(5);
+  });
+  it('averages CCQ only over readings with devices on', () => {
+    const a = sample(1, 17);
+    a.radio = { ...a.radio!, ccq: 80 };
+    const b = sample(2, 17, 2432, 0);
+    b.radio = { ...b.radio!, ccq: 0 };
+    expect(stats([a, b]).ccq).toBe(80);
   });
 });
 

@@ -38,6 +38,8 @@ export function stats(rows: Sample[]): TrialStats {
     lossAvg: mean(rows.map((r) => r.ping.lossPct)),
     clients: mean(rows.map((r) => r.stations?.count)),
     noise: mean(rows.map((r) => r.radio?.noise)),
+    // an AP with nobody on reports CCQ 0, which says nothing about the channel
+    ccq: mean(rows.map((r) => ((r.stations?.count ?? 0) > 0 && (r.radio?.ccq ?? 0) > 0 ? r.radio!.ccq : null))),
     txPower: withRadio?.radio?.txPower ?? null,
     frequency: withRadio?.radio?.frequency ?? null,
   };
@@ -80,6 +82,12 @@ export function evaluate(change: RadioChange, base: TrialStats, after: TrialStat
       name: 'Channel no noisier',
       ok: after.noise != null && after.noise <= base.noise + 2,
       detail: `noise ${after.noise ?? '?'} dBm, was ${base.noise} dBm${after.noise != null && after.noise <= base.noise - 2 ? ' (quieter)' : ''}`,
+    });
+  if (change.frequency != null && base.ccq != null && after.ccq != null)
+    checks.push({
+      name: 'Link quality no worse',
+      ok: after.ccq >= base.ccq - 5,
+      detail: `CCQ ${after.ccq}%, was ${base.ccq}%${after.ccq >= base.ccq + 5 ? ' (better)' : ''}`,
     });
   return checks;
 }

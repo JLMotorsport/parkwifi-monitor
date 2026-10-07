@@ -14,7 +14,7 @@ export class GatewayPoller {
   private client: UniFiClient | null = null;
   private key = '';
   private prev: Counters | undefined;
-  private window: { down: number; up: number }[] = [];
+  private window: { down: number; up: number; flood: number | null; fromGw: number | null }[] = [];
   private timer: NodeJS.Timeout | null = null;
   private busy = false;
 
@@ -77,7 +77,10 @@ export class GatewayPoller {
     const stats = parseStats(raw, this.prev, cur);
     this.prev = cur;
     const w = pickWatchPort(stats.ports, this.cfg.watchPort);
-    if (w && w.txMbps !== null && w.rxMbps !== null) this.window.push({ down: w.txMbps, up: w.rxMbps });
+    if (w && w.txMbps !== null && w.rxMbps !== null) {
+      const f = w.txFloodPps != null || w.rxFloodPps != null ? (w.txFloodPps ?? 0) + (w.rxFloodPps ?? 0) : null;
+      this.window.push({ down: w.txMbps, up: w.rxMbps, flood: f, fromGw: w.txFloodPps ?? null });
+    }
     this.latest = stats;
   }
 
@@ -116,6 +119,13 @@ export class GatewayPoller {
         upPeak: Math.max(...this.window.map((x) => x.up)),
         readings: this.window.length,
       };
+      const fl = this.window.map((x) => x.flood).filter((x): x is number => x !== null);
+      const fg = this.window.map((x) => x.fromGw).filter((x): x is number => x !== null);
+      if (fl.length) {
+        stats.watch.floodPps = Math.round(fl.reduce((a, b) => a + b, 0) / fl.length);
+        stats.watch.floodPeakPps = Math.max(...fl);
+        stats.watch.floodFromGatewayPps = fg.length ? Math.round(fg.reduce((a, b) => a + b, 0) / fg.length) : null;
+      }
     }
     this.window = [];
     return { t, id: 'gw:' + this.cfg.id, ping: { sent: 0, received: 0, lossPct: 0, avg: null, min: null, max: null }, gw: stats };

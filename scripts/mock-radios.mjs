@@ -196,6 +196,9 @@ for (const [ip, r] of Object.entries(radios)) {
     ctr.p3rx += (up * 1e6 * dt) / 8;
     ctr.wrx += ((down + 20) * 1e6 * dt) / 8;
     ctr.wtx += ((up + 3) * 1e6 * dt) / 8;
+    // broadcast/multicast packets; MOCK_FLOOD=1 simulates an mDNS storm from the gateway
+    ctr.p3txf = (ctr.p3txf ?? 0) + (process.env.MOCK_FLOOD ? 220 : 20) * dt;
+    ctr.p3rxf = (ctr.p3rxf ?? 0) + 25 * dt;
   };
   const send = (res, data) => { res.writeHead(200, { 'Content-Type': 'application/json' }); res.end(JSON.stringify({ meta: { rc: 'ok' }, data })); };
   https.createServer(tls, (req, res) => {
@@ -217,7 +220,7 @@ for (const [ip, r] of Object.entries(radios)) {
         port_table: [
           { port_idx: 1, name: 'Port 1', up: true, speed: 1000, rx_bytes: 1000, tx_bytes: 1000 },
           { port_idx: 2, name: 'House LAN', up: true, speed: 1000, rx_bytes: 5000, tx_bytes: 9000 },
-          { port_idx: 3, name: 'Lookout&Monks', up: true, speed: 100, rx_bytes: Math.round(ctr.p3rx), tx_bytes: Math.round(ctr.p3tx) },
+          { port_idx: 3, name: 'Lookout&Monks', up: true, speed: 100, rx_bytes: Math.round(ctr.p3rx), tx_bytes: Math.round(ctr.p3tx), tx_multicast: Math.round(ctr.p3txf ?? 0), tx_broadcast: 0, rx_multicast: Math.round(ctr.p3rxf ?? 0), rx_broadcast: 0 },
           { port_idx: 4, name: 'Port 4', up: false, speed: 0, rx_bytes: 0, tx_bytes: 0 },
         ],
         wan1: { rx_bytes: Math.round(ctr.wrx), tx_bytes: Math.round(ctr.wtx) },

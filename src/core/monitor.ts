@@ -1,8 +1,8 @@
 import { EventEmitter } from 'events';
 import { AirOSClient, AirOSError } from './airos';
-import { advise, isAccessPoint } from './advisor';
+import { advise, channelQuality, isAccessPoint, type ChannelQuality } from './advisor';
 import { AirOSSsh } from './airos-ssh';
-import { AlertEngine, roleOf } from './alerts';
+import { AlertEngine, pcFault, roleOf } from './alerts';
 import { ChangeManager } from './changes';
 import { GatewayPoller } from './gateway';
 import { ConfigStore, SecretBox, slug } from './config';
@@ -48,6 +48,7 @@ export class Monitor extends EventEmitter {
   private gateways = new Map<string, GatewayPoller>();
   private gwLatest = new Map<string, Sample>();
   private lastAdvice: ReturnType<Monitor['adviceInput']> | null = null;
+  private chanHist: { at: number; data: Record<string, ChannelQuality> } | null = null;
 
   constructor(dataDir: string, box: SecretBox, readonly version: string, public hooks: MonitorHooks = {}) {
     super();
@@ -116,7 +117,20 @@ export class Monitor extends EventEmitter {
         capacity: c.backboneMbps ?? 60,
       };
     }
-    return { devices, chain: c.chain, events: this.events, thresholds: c.thresholds, now: Date.now(), gateway };
+    return { devices, chain: c.chain, events: this.events, thresholds: c.thresholds, now: Date.now(), gateway, channelHistory: this.channelHistory(devices) };
+  }
+
+  /** CCQ per channel for each AP over the last week. Reading history is slow, so refresh every 10 minutes. */
+  private channelHistory(devices: DeviceState[]) {
+    const now = Date.now();
+    if (this.chanHist && now - this.chanHist.at < 10 * 60_000) return this.chanHist.data;
+    const data: Record<string, ChannelQuality> = {};
+    for (const d of devices) {
+      if (!isAccessPoint(d, this.cfg.config.chain)) continue;
+      data[d.cfg.id] = channelQuality(this.history.range(d.cfg.id, 7 * 24, Number.MAX_SAFE_INTEGER));
+    }
+    this.chanHist = { at: now, data };
+    return data;
   }
 
   /** Start, restart or stop gateway pollers to match the config. */
@@ -189,24 +203,48 @@ export class Monitor extends EventEmitter {
     try {
       const devs = c.devices.filter((d) => d.enabled);
       const hasPassword = !!this.cfg.password();
-      await pool(devs, 10, async (d) => {
-        const { s, kind } = await this.measure(d, t, hasPassword);
-        const prev = this.latest.get(d.id);
-        this.alerts.evaluate(d, roleOf(d, s.radio ? s : prev), s, prev, c.thresholds, kind);
-        this.latest.set(d.id, s);
-        samples.push(s);
-      });
-      await pool(c.probes, 4, async (pr) => {
-        const s: Sample = { t, id: 'probe:' + pr.id, ping: await reach(pr.host, c.pingCount, 56) };
-        this.latest.set(s.id, s);
-        samples.push(s);
-      });
+      // measure everything first, then decide whether this PC's own connection is the problem
+      const [measured, probes] = await Promise.all([
+        pool(devs, 10, (d) => this.measure(d, t, hasPassword)),
+        pool(c.probes, 4, async (pr) => ({ pr, s: { t, id: 'probe:' + pr.id, ping: await reach(pr.host, c.pingCount, 56) } as Sample })),
+      ]);
+      const gws = new Map<string, Sample>();
       for (const [id, p] of this.gateways) {
         const s = p.flush(t);
-        if (s) {
-          this.gwLatest.set(id, s);
-          samples.push(s);
-        }
+        if (s) gws.set(id, s);
+      }
+      const gwHosts = new Set((c.gateways ?? []).filter((g) => g.enabled).map((g) => g.host));
+      const routerProbe =
+        probes.find((x) => gwHosts.has(x.pr.host)) ?? probes.find((x) => x.pr.id === 'udr3' || /router|gateway|udr|udm/i.test(x.pr.name));
+      const firstId = c.chain.find((id) => devs.some((d) => d.id === id));
+      const fault = pcFault(
+        {
+          firstHop: measured.find((m) => m.s.id === firstId)?.s.ping,
+          internet: (probes.find((x) => x.pr.id === 'internet') ?? probes.find((x) => x !== routerProbe))?.s.ping,
+          router: routerProbe?.s.ping,
+          devices: measured.map((m) => m.s.ping),
+          gatewayWanLatency: [...gws.values()][0]?.gw?.wanLatency ?? null,
+        },
+        c.thresholds,
+      );
+      this.alerts.pc(fault, t);
+      for (const { s, kind } of measured) {
+        const d = devs.find((x) => x.id === s.id)!;
+        if (fault) s.pcFault = true;
+        const prev = this.latest.get(d.id);
+        this.alerts.evaluate(d, roleOf(d, s.radio ? s : prev), s, prev, c.thresholds, kind, !!fault);
+        this.latest.set(d.id, s);
+        samples.push(s);
+      }
+      for (const { s } of probes) {
+        this.latest.set(s.id, s);
+        samples.push(s);
+      }
+      for (const [id, s] of gws) {
+        this.gwLatest.set(id, s);
+        samples.push(s);
+        const g = c.gateways?.find((x) => x.id === id);
+        if (g?.enabled) this.alerts.gateway('gw:' + id, g.name, s.gw, t, c.thresholds);
       }
       this.history.add(samples);
       this.events = this.events.slice(0, 300);

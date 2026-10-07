@@ -86,6 +86,10 @@ export interface GatewayPort {
   txMbps: number | null;
   /** Mbps into the gateway on this port: the caravans' uploads */
   rxMbps: number | null;
+  /** broadcast + multicast packets per second out of this port (towards the caravans); null if not reported */
+  txFloodPps?: number | null;
+  /** broadcast + multicast packets per second into this port (from devices on the radios) */
+  rxFloodPps?: number | null;
 }
 
 export interface GatewayNetwork {
@@ -111,7 +115,20 @@ export interface GatewayStats {
   ports: GatewayPort[];
   networks: GatewayNetwork[];
   /** the radio-feeding port over the last minute: average and busiest 15 s reading */
-  watch?: { idx: number; name: string; downMbps: number; upMbps: number; downPeak: number; upPeak: number; readings: number };
+  watch?: {
+    idx: number;
+    name: string;
+    downMbps: number;
+    upMbps: number;
+    downPeak: number;
+    upPeak: number;
+    readings: number;
+    /** broadcast + multicast packets/s both ways over the minute (what every device on the radios has to hear) */
+    floodPps?: number | null;
+    floodPeakPps?: number | null;
+    /** of which sent by UDR3 itself (mDNS proxy etc.) */
+    floodFromGatewayPps?: number | null;
+  };
 }
 
 export interface PingResult {
@@ -175,6 +192,8 @@ export interface Sample {
   /** present on gateway samples (id `gw:<gateway id>`) */
   gw?: GatewayStats;
   error?: string;
+  /** taken while the PC running the app had a poor connection itself, so the ping figures say nothing about the radio */
+  pcFault?: boolean;
 }
 
 export type Severity = 'warning' | 'serious' | 'critical';
@@ -213,7 +232,7 @@ export interface RadioChange {
   frequency?: number;
 }
 
-export type SuggestionKind = 'channel' | 'power' | 'noise' | 'restarts' | 'no-ip' | 'weak-clients' | 'backbone-link' | 'slow-hop' | 'login' | 'dhcp-full' | 'backbone-full';
+export type SuggestionKind = 'channel' | 'power' | 'noise' | 'restarts' | 'no-ip' | 'weak-clients' | 'backbone-link' | 'slow-hop' | 'login' | 'dhcp-full' | 'backbone-full' | 'flood';
 
 export interface Suggestion {
   /** stable across polls: `<kind>:<deviceId>` */
@@ -237,6 +256,8 @@ export interface TrialStats {
   lossAvg: number | null;
   clients: number | null;
   noise: number | null;
+  /** link quality the AP reports for its devices, averaged over readings that had devices on */
+  ccq: number | null;
   txPower: number | null;
   frequency: number | null;
 }

@@ -14,22 +14,25 @@ const pct = (xs: number[], p: number) => {
 const nums = (xs: (number | null | undefined)[]) => xs.filter((x): x is number => typeof x === 'number' && Number.isFinite(x));
 
 /** Collapse one device's samples into stats: used per hour and for the whole range. */
-function summarise(rows: Sample[]) {
+function summarise(all: Sample[]) {
+  // readings taken while this PC's own connection was poor say nothing about the radios' ping
+  const rows = all.filter((s) => !s.pcFault);
   const avg = nums(rows.map((s) => s.ping.avg));
   const worst = nums(rows.map((s) => s.ping.max));
-  const r = rows.map((s) => s.radio);
-  const st = rows.map((s) => s.stations);
+  const r = all.map((s) => s.radio);
+  const st = all.map((s) => s.stations);
   return {
-    polls: rows.length,
+    polls: all.length,
+    pcFaultPolls: all.length - rows.length,
     noReplyPolls: rows.filter((s) => s.ping.received === 0).length,
-    readErrors: rows.filter((s) => !!s.error).length,
+    readErrors: all.filter((s) => !!s.error).length,
     pingAvgMs: mean(avg),
     pingP95Ms: pct(avg, 95),
     pingWorstMs: max(worst),
     lossAvgPct: mean(rows.map((s) => s.ping.lossPct)),
     signalMin: min(nums(r.map((x) => x?.signal))),
     noiseMax: max(nums(r.map((x) => x?.noise))),
-    ccqMin: min(nums(r.map((x) => x?.ccq))),
+    ccqMin: min(nums(r.map((x) => x?.ccq)).filter((x) => x > 0)),
     capacityMin: min(nums(r.map((x) => x?.airmaxCapacity))),
     txRateMin: min(nums(r.map((x) => x?.txRate))),
     rxRateMin: min(nums(r.map((x) => x?.rxRate))),
@@ -104,6 +107,9 @@ export function buildExport(m: Monitor, hours: number) {
       'signalMin/ccqMin/capacityMin/txRateMin are the lowest values seen in the hour; noiseMax/clientsMax/weakClientsMax the highest.',
       'estInternetMsNow = this radio\'s ping plus the office PC\'s internet ping: an estimate of what a customer there sees, not a measurement from the radio.',
       'gateways[].hourly: radio port = the gateway port feeding the backbone; Down = towards the caravans. Peaks are the busiest 15 s reading in each minute, then the highest of those in the hour.',
+      'pcFaultPolls = polls taken while the PC running the app had a poor connection itself (its own router or internet was slow too). Their ping figures are left out of the stats.',
+      'ccqMin ignores readings of 0, which an AP reports when nobody is connected.',
+      'floodPps = broadcast + multicast packets per second on the radio-feeding port; every device on the radios has to hear these. Under about 60 is normal.',
       `A client counts as weak at or below ${c.thresholds.weakSignal} dBm.`,
     ],
     settings: { ...safeConfig, server: { ...safeConfig.server, token: '(removed)' } },
@@ -146,6 +152,9 @@ export function buildExport(m: Monitor, hours: number) {
               radioPortDownPeakMbps: max(w.map((x) => x.downPeak)),
               radioPortUpAvgMbps: mean(w.map((x) => x.upMbps)),
               radioPortUpPeakMbps: max(w.map((x) => x.upPeak)),
+              floodAvgPps: mean(nums(w.map((x) => x.floodPps))),
+              floodPeakPps: max(nums(w.map((x) => x.floodPeakPps))),
+              floodFromGatewayAvgPps: mean(nums(w.map((x) => x.floodFromGatewayPps))),
               wanLatencyAvgMs: mean(lat),
               wanLatencyWorstMs: max(lat),
               clientsByNetwork: nets.map((n) => `${n.name}: ${n.clients}${n.poolSize ? '/' + n.poolSize : ''}`).join(', ') || null,

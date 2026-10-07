@@ -62,7 +62,7 @@ export function DevicePanel({ s, id, close, thresholds }: { s: AppState; id: str
       title="Ping from this PC"
       unit="ms"
       hours={hours}
-      data={series((x) => x.ping.avg)}
+      data={series((x) => (x.pcFault ? null : x.ping.avg))}
       threshold={thresholds.latencyMs}
       min={0}
       extra={(i) => (hist[i] ? `worst ${n(hist[i].ping.max, ' ms')} · loss ${n(hist[i].ping.lossPct, '%')}` : null)}
@@ -188,7 +188,7 @@ export function DevicePanel({ s, id, close, thresholds }: { s: AppState; id: str
             <span className="hint">{hist.length} samples</span>
           </div>
           {pingChart}
-          <LineChart title="Packet loss" unit="%" hours={hours} data={series((x) => x.ping.lossPct)} min={0} max={100} height={100} />
+          <LineChart title="Packet loss" unit="%" hours={hours} data={series((x) => (x.pcFault ? null : x.ping.lossPct))} min={0} max={100} height={100} />
           {role === 'backbone-sta' && (
             <>
               <LineChart title="Signal" unit="dBm" hours={hours} data={series((x) => x.radio?.signal)} height={110} />

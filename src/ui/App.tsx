@@ -76,6 +76,9 @@ export function App() {
     window.scrollTo(0, 0);
   };
   const open = (id: string) => {
+    // alerts about this PC or the gateway have no radio to open
+    if (id === 'pc') return go('dashboard');
+    if (id.startsWith('gw:')) return go('dashboard');
     setSel(id);
     setDevFilter('all');
     go('devices');
@@ -93,6 +96,7 @@ export function App() {
   const overall = worst(s.alerts.map((a) => a.severity));
   const enabled = s.devices.filter((d) => d.cfg.enabled);
   const fixCount = s.suggestions.filter((x) => x.change || x.severity !== 'info').length;
+  const pcAlert = s.alerts.find((a) => a.key === 'pc:connection');
   const testing = s.trial && ['checking', 'applying', 'testing'].includes(s.trial.status) ? s.trial : null;
 
   return (
@@ -193,6 +197,12 @@ export function App() {
               <button className="btn small" onClick={() => go('settings')}>
                 Open Settings
               </button>
+            </div>
+          )}
+          {pcAlert && (
+            <div className="banner bad" role="status">
+              <b>Readings on hold: this PC's own connection is poor.</b> {pcAlert.detail} Radio ping alerts are paused until it recovers, so
+              they aren't blamed on the radios. Run the app on a PC wired to the house network for true readings.
             </div>
           )}
           {testing && page !== 'fixes' && (

@@ -123,7 +123,7 @@ const str = (v: unknown) => (typeof v === 'string' ? v : '');
 const isGateway = (d: O) => ['udm', 'ugw', 'uxg'].includes(str(d.type)) || !!d.wan1;
 
 /** Port byte counters, keyed by port_idx (WAN is -1), for working out rates between readings. */
-export type Counters = { t: number; ports: Record<number, { rx: number; tx: number }> };
+export type Counters = { t: number; ports: Record<number, { rx: number; tx: number; rxFlood?: number; txFlood?: number }> };
 
 export function gatewayDevice(devices: unknown[]): O | null {
   const list = devices as O[];
@@ -136,7 +136,15 @@ export function readCounters(dev: O, t: number): Counters {
     const idx = num(p.port_idx);
     const rx = num(p.rx_bytes);
     const tx = num(p.tx_bytes);
-    if (idx !== null && rx !== null && tx !== null) ports[idx] = { rx, tx };
+    if (idx !== null && rx !== null && tx !== null) {
+      ports[idx] = { rx, tx };
+      // broadcast + multicast packet counters; not every model reports them
+      const sum = (a: unknown, b: unknown) => (num(a) === null && num(b) === null ? undefined : (num(a) ?? 0) + (num(b) ?? 0));
+      const rxF = sum(p.rx_broadcast, p.rx_multicast);
+      const txF = sum(p.tx_broadcast, p.tx_multicast);
+      if (rxF !== undefined) ports[idx].rxFlood = rxF;
+      if (txF !== undefined) ports[idx].txFlood = txF;
+    }
   }
   const w = dev.wan1 as O | undefined;
   if (w && num(w.rx_bytes) !== null && num(w.tx_bytes) !== null) ports[-1] = { rx: num(w.rx_bytes)!, tx: num(w.tx_bytes)! };
@@ -152,6 +160,16 @@ export function rate(prev: Counters | undefined, cur: Counters, idx: number, dir
   const d = b[dir] - a[dir];
   if (dt <= 0 || d < 0) return null;
   return Math.round(((d * 8) / dt / 1e6) * 100) / 100;
+}
+
+/** Broadcast + multicast packets per second between two readings, or null when not reported. */
+export function floodRate(prev: Counters | undefined, cur: Counters, idx: number, dir: 'rxFlood' | 'txFlood'): number | null {
+  const a = prev?.ports[idx]?.[dir];
+  const b = cur.ports[idx]?.[dir];
+  if (a === undefined || b === undefined || !prev) return null;
+  const dt = (cur.t - prev.t) / 1000;
+  if (dt <= 0 || b < a) return null;
+  return Math.round((b - a) / dt);
 }
 
 function poolSize(start: string, stop: string): number | null {
@@ -182,6 +200,8 @@ export function parseStats(raw: Raw, prev: Counters | undefined, cur: Counters):
         speed: num(p.speed),
         txMbps: rate(prev, cur, idx, 'tx') ?? (prev ? null : fallback('tx_bytes-r')),
         rxMbps: rate(prev, cur, idx, 'rx') ?? (prev ? null : fallback('rx_bytes-r')),
+        txFloodPps: floodRate(prev, cur, idx, 'txFlood'),
+        rxFloodPps: floodRate(prev, cur, idx, 'rxFlood'),
       };
     })
     .filter((p) => p.idx !== -99)

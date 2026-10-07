@@ -102,6 +102,18 @@ export function BackboneLoad({ s, goSettings }: { s: AppState; goSettings: () =>
           </div>
         </div>
         <div className="kv">
+          <div className="k">Broadcast traffic on the radios</div>
+          <div className={`v ${w?.floodPps != null && w.floodPps >= 300 ? 'ink-serious' : w?.floodPps != null && w.floodPps >= 150 ? 'ink-warning' : ''}`}>
+            {w?.floodPps != null ? (
+              <>
+                {w.floodPps}/s <small>{w.floodFromGatewayPps != null ? `${w.floodFromGatewayPps}/s from UDR3 · ` : ''}normal under 60</small>
+              </>
+            ) : (
+              <span title="UDR3 did not report broadcast and multicast counters for this port">–</span>
+            )}
+          </div>
+        </div>
+        <div className="kv">
           <div className="k">Internet latency, measured by UDR3</div>
           <div className="v">{gw?.wanLatency != null ? `${gw.wanLatency} ms` : '–'}</div>
         </div>
@@ -121,6 +133,9 @@ export function BackboneLoad({ s, goSettings }: { s: AppState; goSettings: () =>
       <div className="card-b charts">
         <LineChart title="To the caravans (busiest 15 s each minute)" unit="Mbps" hours={hours} data={series((x) => x.gw?.watch?.downPeak)} threshold={cap} min={0} height={130} />
         <LineChart title="From the caravans (uploads)" unit="Mbps" hours={hours} data={series((x) => x.gw?.watch?.upPeak)} min={0} height={130} />
+        {shown.some((x) => x.gw?.watch?.floodPps != null) && (
+          <LineChart title="Broadcast and multicast reaching every device" unit="/s" hours={hours} data={series((x) => x.gw?.watch?.floodPps)} threshold={150} min={0} height={110} />
+        )}
       </div>
       {gw && gw.networks.length > 0 && (
         <div className="tbl-wrap" style={{ borderTop: '1px solid var(--border-soft)' }}>

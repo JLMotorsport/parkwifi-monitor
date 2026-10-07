@@ -1,7 +1,8 @@
 // Turns the latest readings into plain-English suggestions. Pure: no I/O, fully unit tested.
 // Only access-point power and channel changes carry a `change` the app may apply itself;
 // everything on the backbone stays advice, because a bad change there cuts off the app too.
-import type { AlertItem, DeviceState, GatewayStats, Severity, Suggestion, Thresholds } from './types';
+import { FLOOD_SERIOUS_PPS, FLOOD_WARN_PPS } from './alerts';
+import type { AlertItem, DeviceState, GatewayStats, Sample, Severity, Suggestion, Thresholds } from './types';
 
 export interface AdvisorInput {
   devices: DeviceState[];
@@ -9,6 +10,8 @@ export interface AdvisorInput {
   events: AlertItem[];
   thresholds: Thresholds;
   now: number;
+  /** per AP: how its devices' link quality (CCQ) looked on each frequency it has used recently */
+  channelHistory?: Record<string, ChannelQuality>;
   gateway?: {
     id: string;
     name: string;
@@ -20,6 +23,31 @@ export interface AdvisorInput {
     /** what the backbone can really carry (Mbps), from Settings */
     capacity: number;
   };
+}
+
+export type ChannelQuality = Record<number, { ccq: number; samples: number }>;
+/** Readings on a channel needed before its history counts (about half an hour at one a minute). */
+export const MIN_CHANNEL_SAMPLES = 30;
+
+/**
+ * Median CCQ per frequency from an AP's history. Only readings with devices on count: an empty
+ * AP reports CCQ 0, which says nothing about the channel.
+ */
+export function channelQuality(rows: Sample[]): ChannelQuality {
+  const by = new Map<number, number[]>();
+  for (const r of rows) {
+    const f = r.radio?.frequency;
+    const q = r.radio?.ccq;
+    if (f == null || q == null || q <= 0 || (r.stations?.count ?? 0) === 0) continue;
+    if (!by.has(f)) by.set(f, []);
+    by.get(f)!.push(q);
+  }
+  const out: ChannelQuality = {};
+  for (const [f, xs] of by) {
+    xs.sort((a, b) => a - b);
+    out[f] = { ccq: Math.round(xs[Math.floor(xs.length / 2)]), samples: xs.length };
+  }
+  return out;
 }
 
 /** Minutes of gateway history needed before calling the backbone full (about 6 hours). */
@@ -85,7 +113,22 @@ export function advise(inp: AdvisorInput): Suggestion[] {
 
     // ---- channel ----
     const target = plan.get(d.cfg.id);
-    if (r && r.channel != null && target != null && target !== r.channel) {
+    // Don't send an AP back to a channel where its devices measurably did worse.
+    const hist = inp.channelHistory?.[d.cfg.id];
+    const was = target != null ? hist?.[freqOf(target)] : undefined;
+    const nowQ = r?.frequency != null ? hist?.[r.frequency] : undefined;
+    const nowCcq = nowQ && nowQ.samples >= MIN_CHANNEL_SAMPLES ? nowQ.ccq : (st?.count ?? 0) > 0 && (r?.ccq ?? 0) > 0 ? r!.ccq : null;
+    const worseThere = !!was && was.samples >= MIN_CHANNEL_SAMPLES && nowCcq != null && was.ccq < nowCcq - 5;
+    if (r && r.channel != null && target != null && target !== r.channel && worseThere) {
+      add({
+        kind: 'channel',
+        deviceId: d.cfg.id,
+        severity: 'info',
+        title: `Leave ${name} on channel ${r.channel} for now`,
+        why: `The channel plan would put it on ${target}, but when it was on ${target} its devices' link quality was about ${was!.ccq}%, against ${nowCcq}% on ${r.channel}. Something near it uses ${target}: a neighbour's WiFi, an extender, or another of your APs.`,
+        fix: `Find what is on channel ${target} near ${name} (airOS Site Survey) and remove or move it, then try ${target} again with a test.`,
+      });
+    } else if (r && r.channel != null && target != null && target !== r.channel) {
       const peers = aps.filter((x) => x !== d && x.cfg.site === d.cfg.site && x.latest?.radio?.channel != null);
       const overlap = peers.filter((x) => Math.abs(x.latest!.radio!.channel! - r.channel!) < 5);
       const noisy = r.noise != null && r.noise > th.apNoise;
@@ -236,6 +279,23 @@ export function advise(inp: AdvisorInput): Suggestion[] {
         fix: `In UniFi, open the ${n.name} network: widen the DHCP range${hrs && hrs > 4 ? ` and cut the lease time from ${hrs} hours to 2 to 4 hours, so addresses from phones that have left come back quickly` : ''}.`,
       });
     }
+  }
+  const w = g?.stats?.watch;
+  if (g && w?.floodPps != null && w.floodPps >= FLOOD_WARN_PPS) {
+    const fromGw = w.floodFromGatewayPps ?? null;
+    const mostlyGw = fromGw !== null && fromGw >= w.floodPps / 2;
+    out.push({
+      id: `flood:${g.id}`,
+      kind: 'flood',
+      deviceId: g.id,
+      deviceName: g.name,
+      severity: w.floodPps >= FLOOD_SERIOUS_PPS ? 'serious' : 'warning',
+      title: `Broadcast flood: ${w.floodPps} packets a second on the radios`,
+      why: `Broadcast and multicast packets go to every device on every AP, at the slowest rate, so they eat airtime everyone shares. After the mDNS fix the park ran at about 50 a second; ${w.floodPps} is the level that caused the "connected, no internet" waves.${fromGw !== null ? ` ${fromGw} a second come from ${g.name} itself.` : ''}`,
+      fix: mostlyGw
+        ? `Most of it comes from ${g.name}. In UniFi check Settings, Networks, Multicast and mDNS: the mDNS proxy must not include the Lookout & Monks network, and IGMP snooping should be on. Undo any change made there recently.`
+        : `Most of it comes from a device on the radios. Capture on a laptop on the park WiFi (pktmon) to find the MAC, then block it on its AP with the MAC ACL. Fire Sticks, Chromecasts and smart watches are the usual culprits.`,
+    });
   }
   if (g && g.peakDown95 !== null && g.samples >= MIN_LOAD_SAMPLES && g.capacity > 0) {
     const pct = Math.round((g.peakDown95 / g.capacity) * 100);
