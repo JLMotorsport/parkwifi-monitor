@@ -346,5 +346,8 @@ export function parseStations(raw: unknown): Station[] {
     latency: num(s.txlatency ?? s.latency),
     uptime: num(s.uptime),
     distanceM: num(s.distance),
+    sentPkts: num(obj(s.stats).rx_data),
+    sentBytes: num(obj(s.stats).rx_bytes),
+    recvPkts: num(obj(s.stats).tx_data),
   }));
 }

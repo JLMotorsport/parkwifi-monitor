@@ -2,7 +2,7 @@
 // Only access-point power and channel changes carry a `change` the app may apply itself;
 // everything on the backbone stays advice, because a bad change there cuts off the app too.
 import { FLOOD_SERIOUS_PPS, FLOOD_WARN_PPS } from './alerts';
-import type { AlertItem, DeviceState, GatewayStats, Sample, Severity, Suggestion, Thresholds } from './types';
+import type { AlertItem, DeviceState, GatewayStats, Sample, Severity, Suggestion, Talker, Thresholds } from './types';
 
 export interface AdvisorInput {
   devices: DeviceState[];
@@ -12,6 +12,8 @@ export interface AdvisorInput {
   now: number;
   /** per AP: how its devices' link quality (CCQ) looked on each frequency it has used recently */
   channelHistory?: Record<string, ChannelQuality>;
+  /** devices ranked by how much they send, with flood suspects first */
+  talkers?: Talker[];
   gateway?: {
     id: string;
     name: string;
@@ -94,6 +96,9 @@ export function channelPlan(aps: DeviceState[]): Map<string, number> {
   }
   return out;
 }
+
+export const talkerName = (t: Talker) => [t.name, t.vendor].filter(Boolean).join(', ') || t.mac;
+const describeTalker = (t: Talker) => `${talkerName(t)} (${t.mac}${t.ip ? `, ${t.ip}` : ''}) on ${t.apName}, ${t.sentPps} packets a second`;
 
 export function advise(inp: AdvisorInput): Suggestion[] {
   const { devices, chain, events, thresholds: th, now } = inp;
@@ -280,6 +285,7 @@ export function advise(inp: AdvisorInput): Suggestion[] {
       });
     }
   }
+  const suspects = (inp.talkers ?? []).filter((t) => t.suspect).slice(0, 3);
   const w = g?.stats?.watch;
   if (g && w?.floodPps != null && w.floodPps >= FLOOD_WARN_PPS) {
     const fromGw = w.floodFromGatewayPps ?? null;
@@ -294,7 +300,23 @@ export function advise(inp: AdvisorInput): Suggestion[] {
       why: `Broadcast and multicast packets go to every device on every AP, at the slowest rate, so they eat airtime everyone shares. After the mDNS fix the park ran at about 50 a second; ${w.floodPps} is the level that caused the "connected, no internet" waves.${fromGw !== null ? ` ${fromGw} a second come from ${g.name} itself.` : ''}`,
       fix: mostlyGw
         ? `Most of it comes from ${g.name}. In UniFi check Settings, Networks, Multicast and mDNS: the mDNS proxy must not include the Lookout & Monks network, and IGMP snooping should be on. Undo any change made there recently.`
-        : `Most of it comes from a device on the radios. Capture on a laptop on the park WiFi (pktmon) to find the MAC, then block it on its AP with the MAC ACL. Fire Sticks, Chromecasts and smart watches are the usual culprits.`,
+        : suspects.length
+          ? `Most of it comes from devices on the radios, and the likeliest are: ${suspects.map(describeTalker).join('; ')}. Block ${suspects.length === 1 ? 'it' : 'them'} on ${suspects.length === 1 ? 'that AP' : 'those APs'} (Wireless, MAC ACL, Deny) and watch the flood figure drop.`
+          : `Most of it comes from a device on the radios, but none stands out yet: the app needs about 10 minutes of readings to match devices to the flood. Check "Who is sending the most" on the Dashboard shortly.`,
+    });
+  }
+  // a device broadcasting steadily is worth blocking before it builds into a flood
+  for (const t of suspects) {
+    if (t.minutes < 10) continue;
+    out.push({
+      id: `talker:${t.mac}`,
+      kind: 'flood',
+      deviceId: t.apId,
+      deviceName: t.apName,
+      severity: t.sentPps >= 40 ? 'warning' : 'info',
+      title: `${talkerName(t)} keeps broadcasting`,
+      why: `${t.suspect} Broadcasts go to every device on every AP at the slowest rate, so one chatty device slows the whole park.`,
+      fix: `Block ${t.mac} on ${t.apName} (Wireless, MAC ACL, policy Deny, add the MAC). If it belongs to a customer, it is usually a Fire Stick, Chromecast or smart TV stuck searching for something to cast to; restarting it often stops it.`,
     });
   }
   if (g && g.peakDown95 !== null && g.samples >= MIN_LOAD_SAMPLES && g.capacity > 0) {

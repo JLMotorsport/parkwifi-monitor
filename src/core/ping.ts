@@ -88,3 +88,42 @@ export async function reach(host: string, count: number, size: number): Promise<
   }
   return p;
 }
+
+/**
+ * Each reply time in order, null for each one that didn't come back. Windows prints one line per
+ * attempt (a reply, "Request timed out." or an error); Linux numbers replies with icmp_seq and
+ * prints nothing for a lost one.
+ */
+export function parsePingSeries(out: string, count: number): (number | null)[] {
+  const res: (number | null)[] = [];
+  const bySeq: (number | null)[] = Array(count).fill(null);
+  let sawSeq = false;
+  for (const line of out.split(/\r?\n/)) {
+    const time = /ttl[=:]/i.test(line) ? line.match(/time\s*[=<]\s*([\d.,]+)\s*ms/i) : null;
+    const seq = line.match(/icmp_seq[=:]\s*(\d+)/i);
+    if (seq && time) {
+      sawSeq = true;
+      const i = parseInt(seq[1], 10) - 1;
+      if (i >= 0 && i < count) bySeq[i] = parseFloat(time[1].replace(',', '.'));
+      continue;
+    }
+    if (time) res.push(parseFloat(time[1].replace(',', '.')));
+    else if (/timed out|unreachable|general failure|transmit failed|ttl expired/i.test(line)) res.push(null);
+  }
+  if (sawSeq) return bySeq;
+  while (res.length < count) res.push(null);
+  return res.slice(0, count);
+}
+
+/** One ping a second for `count` seconds, keeping every reply time. */
+export function pingSeries(host: string, count: number, size = 56, timeoutMs = 1000): Promise<(number | null)[]> {
+  const win = process.platform === 'win32';
+  const args = win
+    ? ['-n', String(count), '-w', String(timeoutMs), '-l', String(size), host]
+    : ['-c', String(count), '-i', '1', '-W', String(Math.ceil(timeoutMs / 1000)), '-s', String(size), host];
+  return new Promise((resolve) => {
+    execFile('ping', args, { timeout: count * (timeoutMs + 1200) + 5000, windowsHide: true }, (_err, stdout) => {
+      resolve(parsePingSeries(String(stdout ?? ''), count));
+    });
+  });
+}

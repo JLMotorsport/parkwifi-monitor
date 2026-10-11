@@ -6,6 +6,7 @@ import { duration, n, roleLabel, sigClass } from '../format';
 import { Icon } from './Icon';
 import { LineChart, Pt } from './LineChart';
 import { Pill } from './Pill';
+import { TraceButton, TraceCard } from './Investigate';
 
 const RANGES = [1, 6, 24, 48, 168];
 type Tab = 'overview' | 'clients' | 'history' | 'raw';
@@ -121,6 +122,13 @@ export function DevicePanel({ s, id, close, thresholds }: { s: AppState; id: str
             <Fact k="Uptime" v={duration(r?.uptime)} />
           </div>
           <div className="psec">
+            <div className="row-actions">
+              <TraceButton s={s} id={id} />
+            </div>
+            {(() => {
+              const t = s.traces.find((x) => x.targetId === id);
+              return t ? <TraceCard t={t} now={s.now} /> : null;
+            })()}
             {pingChart}
             {role === 'backbone-sta' && (
               <LineChart title="airMAX capacity" unit="%" hours={hours} data={series((x) => x.radio?.airmaxCapacity)} threshold={thresholds.backboneCapacity} max={100} height={100} />

@@ -154,6 +154,65 @@ export interface Station {
   latency: number | null;
   uptime: number | null;
   distanceM: number | null;
+  /** running counters from airOS: packets/bytes the AP received from this device (it sent), and sent to it */
+  sentPkts?: number | null;
+  sentBytes?: number | null;
+  recvPkts?: number | null;
+}
+
+/** A device ranked by how much it sends, for finding what floods the radios. */
+export interface Talker {
+  mac: string;
+  ip: string;
+  /** from UDR3's client list when known */
+  name: string;
+  vendor: string;
+  apId: string;
+  apName: string;
+  signal: number | null;
+  /** packets a second it sent, averaged over the window, and its busiest minute */
+  sentPps: number;
+  sentPeakPps: number;
+  /** packets a second the AP sent to it */
+  recvPps: number;
+  avgBytes: number | null;
+  /** how closely its sending follows the flood level on UDR3 (-1..1), null without enough overlap */
+  floodMatch: number | null;
+  minutes: number;
+  /** plain-English reason when it looks like a flood source */
+  suspect: string | null;
+}
+
+export interface TraceHop {
+  id: string;
+  name: string;
+  /** one entry per second; null = no reply */
+  series: (number | null)[];
+  median: number | null;
+  p95: number | null;
+  worst: number | null;
+  lossPct: number;
+  /** delay this hop adds on top of the one before it, at the median */
+  addedMedian: number | null;
+  /** spikes that first appear at this hop */
+  spikesStartHere: number;
+}
+
+export interface TraceResult {
+  id: string;
+  targetId: string;
+  targetName: string;
+  reason: 'manual' | 'alert';
+  startedAt: number;
+  seconds: number;
+  hops: TraceHop[];
+  spikes: number;
+  /** index into hops of the hop where most spikes start, or null */
+  culprit: number | null;
+  verdict: string;
+  /** what else was true during the test */
+  context: { backboneMbps: number | null; floodPps: number | null; culpritLink?: string };
+  error?: string;
 }
 
 export interface RadioStatus {
@@ -307,6 +366,9 @@ export interface AppState {
   gateways: { cfg: PublicGateway; latest?: Sample; error?: string; errorAt?: number; load?: { peakDown95: number | null; peakUp95: number | null; samples: number } }[];
   backboneMbps: number;
   trial: ChangeTrial | null;
+  talkers: Talker[];
+  traces: TraceResult[];
+  traceRunning: string | null;
   changes: ChangeTrial[];
 }
 

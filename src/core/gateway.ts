@@ -7,8 +7,22 @@ const FAST_MS = 15_000;
 const AUTH_BACKOFF_MS = 10 * 60_000;
 const NET_BACKOFF_MS = 60_000;
 
+/** Name, maker and address for each device UDR3 knows, keyed by upper-case MAC. */
+export function clientInfo(list: unknown[]): Map<string, { name: string; vendor: string; ip: string }> {
+  const m = new Map<string, { name: string; vendor: string; ip: string }>();
+  for (const c of list as Record<string, unknown>[]) {
+    const mac = typeof c.mac === 'string' ? c.mac.toUpperCase() : '';
+    if (!mac) continue;
+    const s = (v: unknown) => (typeof v === 'string' ? v : '');
+    m.set(mac, { name: s(c.name) || s(c.hostname), vendor: s(c.oui), ip: s(c.ip) || s(c.last_ip) });
+  }
+  return m;
+}
+
 export class GatewayPoller {
   latest: GatewayStats | null = null;
+  /** UDR3's own list of devices: name and maker by MAC (upper case), for naming flood sources */
+  clients = new Map<string, { name: string; vendor: string; ip: string }>();
   error = '';
   errorAt = 0;
   private client: UniFiClient | null = null;
@@ -76,6 +90,7 @@ export class GatewayPoller {
     const cur = readCounters(dev, Date.now());
     const stats = parseStats(raw, this.prev, cur);
     this.prev = cur;
+    this.clients = clientInfo(raw.clients);
     const w = pickWatchPort(stats.ports, this.cfg.watchPort);
     if (w && w.txMbps !== null && w.rxMbps !== null) {
       const f = w.txFloodPps != null || w.rxFloodPps != null ? (w.txFloodPps ?? 0) + (w.rxFloodPps ?? 0) : null;

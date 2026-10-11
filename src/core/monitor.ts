@@ -2,13 +2,17 @@ import { EventEmitter } from 'events';
 import { AirOSClient, AirOSError } from './airos';
 import { advise, channelQuality, isAccessPoint, type ChannelQuality } from './advisor';
 import { AirOSSsh } from './airos-ssh';
-import { AlertEngine, pcFault, roleOf } from './alerts';
+import { AlertEngine, parentOf, pcFault, roleOf } from './alerts';
+import { TalkerTracker } from './flood';
+import { analyseTrace } from './trace';
+import fs from 'fs';
+import path from 'path';
 import { ChangeManager } from './changes';
 import { GatewayPoller } from './gateway';
 import { ConfigStore, SecretBox, slug } from './config';
-import { ping, reach } from './ping';
+import { ping, pingSeries, reach } from './ping';
 import { HistoryStore } from './store';
-import type { AlertItem, AppState, DeviceCfg, DeviceState, Sample, SpeedTestRecord, Station, UpdateInfo } from './types';
+import type { AlertItem, AppState, DeviceCfg, DeviceState, Sample, SpeedTestRecord, Station, TraceResult, UpdateInfo } from './types';
 
 async function pool<T, R>(items: T[], limit: number, fn: (t: T) => Promise<R>): Promise<R[]> {
   const out: R[] = new Array(items.length);
@@ -49,6 +53,11 @@ export class Monitor extends EventEmitter {
   private gwLatest = new Map<string, Sample>();
   private lastAdvice: ReturnType<Monitor['adviceInput']> | null = null;
   private chanHist: { at: number; data: Record<string, ChannelQuality> } | null = null;
+  readonly talkers = new TalkerTracker();
+  traces: TraceResult[] = [];
+  traceRunning: string | null = null;
+  private lastAutoTrace = 0;
+  private tracesFile: string;
 
   constructor(dataDir: string, box: SecretBox, readonly version: string, public hooks: MonitorHooks = {}) {
     super();
@@ -60,6 +69,7 @@ export class Monitor extends EventEmitter {
         this.history.logAlert(a);
         this.events.unshift(a);
         if (this.cfg.config.notifications) this.hooks.notify?.(a);
+        this.autoTrace(a);
       },
       resolved: (a) => {
         this.history.logAlert(a);
@@ -71,6 +81,14 @@ export class Monitor extends EventEmitter {
         if (this.cfg.config.notifications) this.hooks.notify?.(a);
       },
     });
+    this.tracesFile = path.join(dataDir, 'traces.jsonl');
+    this.traces = readTraces(this.tracesFile);
+    try {
+      // keep the file small: rewrite it with only the recent tests once it grows
+      if (fs.statSync(this.tracesFile).size > 2_000_000) fs.writeFileSync(this.tracesFile, [...this.traces].reverse().map((t) => JSON.stringify(t)).join('\n') + '\n');
+    } catch {
+      /* no file yet */
+    }
     for (const d of this.cfg.config.devices) {
       const prev = this.history.previous(d.id);
       if (prev) this.latest.set(d.id, prev);
@@ -117,7 +135,97 @@ export class Monitor extends EventEmitter {
         capacity: c.backboneMbps ?? 60,
       };
     }
-    return { devices, chain: c.chain, events: this.events, thresholds: c.thresholds, now: Date.now(), gateway, channelHistory: this.channelHistory(devices) };
+    return {
+      devices,
+      chain: c.chain,
+      events: this.events,
+      thresholds: c.thresholds,
+      now: Date.now(),
+      gateway,
+      channelHistory: this.channelHistory(devices),
+      talkers: this.talkerList(),
+    };
+  }
+
+  /** Devices ranked by how much they send, named from UDR3's client list where possible. */
+  talkerList() {
+    const pollers = [...this.gateways.values()];
+    return this.talkers.talkers((mac) => {
+      for (const p of pollers) {
+        const i = p.clients.get(mac);
+        if (i) return i;
+      }
+      return undefined;
+    });
+  }
+
+  /** The hops from this PC to a radio: the backbone up to the radio it hangs off, then the radio. */
+  tracePath(targetId: string): DeviceCfg[] {
+    const c = this.cfg.config;
+    const devs = c.devices.filter((d) => d.enabled);
+    const byId = (id: string) => devs.find((d) => d.id === id);
+    const chain = c.chain.map(byId).filter((d): d is DeviceCfg => !!d);
+    const i = chain.findIndex((d) => d.id === targetId);
+    if (i >= 0) return chain.slice(0, i + 1);
+    const target = byId(targetId);
+    if (!target) return chain;
+    const pid = parentOf(targetId, devs, c.chain);
+    const j = pid ? chain.findIndex((d) => d.id === pid) : -1;
+    return [...chain.slice(0, j + 1), target];
+  }
+
+  /** Ping every hop to a radio once a second for 30 s, all at once, and work out where delay spikes start. */
+  async runTrace(targetId: string, reason: 'manual' | 'alert' = 'manual', seconds = 30): Promise<TraceResult> {
+    if (this.traceRunning) throw new Error('A path test is already running');
+    const c = this.cfg.config;
+    const hops = this.tracePath(targetId);
+    const target = hops[hops.length - 1];
+    this.traceRunning = targetId;
+    this.emit('change');
+    const startedAt = Date.now();
+    try {
+      const series = await Promise.all(hops.map((h) => pingSeries(h.ip, seconds, c.pingSize)));
+      const states = this.deviceStates();
+      const g = [...this.gwLatest.values()][0]?.gw?.watch;
+      const a = analyseTrace({
+        hops: hops.map((h, i) => {
+          const st = states.find((x) => x.cfg.id === h.id);
+          return {
+            id: h.id,
+            name: h.name,
+            role: st?.role ?? 'unknown',
+            series: series[i],
+            radio: st?.latest?.radio,
+            clients: st?.latest?.stations?.count,
+            weakest: st?.latest?.stations?.worstSignal ?? null,
+          };
+        }),
+        backboneMbps: g ? g.downMbps : null,
+        capacity: c.backboneMbps ?? 60,
+        floodPps: g?.floodPps ?? null,
+      });
+      const r: TraceResult = { id: `${startedAt}`, targetId, targetName: target?.name ?? targetId, reason, startedAt, seconds, ...a };
+      this.traces.unshift(r);
+      this.traces = this.traces.slice(0, 30);
+      try {
+        fs.appendFileSync(this.tracesFile, JSON.stringify(r) + '\n');
+      } catch {
+        /* history is a nice-to-have */
+      }
+      return r;
+    } finally {
+      this.traceRunning = null;
+      this.emit('change');
+    }
+  }
+
+  /** When a radio starts replying slowly, test the path straight away, at most every 20 minutes. */
+  private autoTrace(a: AlertItem) {
+    if (!/:(latency|loss)$/.test(a.key) || this.traceRunning) return;
+    if (this.alerts.active.has('pc:connection')) return;
+    if (Date.now() - this.lastAutoTrace < 20 * 60_000) return;
+    this.lastAutoTrace = Date.now();
+    setTimeout(() => void this.runTrace(a.deviceId, 'alert').catch(() => undefined), 0);
   }
 
   /** CCQ per channel for each AP over the last week. Reading history is slow, so refresh every 10 minutes. */
@@ -232,7 +340,12 @@ export class Monitor extends EventEmitter {
         const d = devs.find((x) => x.id === s.id)!;
         if (fault) s.pcFault = true;
         const prev = this.latest.get(d.id);
-        this.alerts.evaluate(d, roleOf(d, s.radio ? s : prev), s, prev, c.thresholds, kind, !!fault);
+        const role = roleOf(d, s.radio ? s : prev);
+        const pid = parentOf(d.id, devs, c.chain);
+        const pm = pid ? measured.find((m) => m.s.id === pid) : undefined;
+        const parent = pm ? { name: devs.find((x) => x.id === pid)!.name, ping: pm.s.ping } : undefined;
+        this.alerts.evaluate(d, role, s, prev, c.thresholds, kind, !!fault, parent);
+        if (s.radio && role === 'ap' && !c.chain.includes(d.id)) this.talkers.update(d.id, d.name, this.live.get(d.id) ?? [], t);
         this.latest.set(d.id, s);
         samples.push(s);
       }
@@ -244,7 +357,12 @@ export class Monitor extends EventEmitter {
         this.gwLatest.set(id, s);
         samples.push(s);
         const g = c.gateways?.find((x) => x.id === id);
-        if (g?.enabled) this.alerts.gateway('gw:' + id, g.name, s.gw, t, c.thresholds);
+        if (g?.enabled) {
+          this.alerts.gateway('gw:' + id, g.name, s.gw, t, c.thresholds);
+          const w = s.gw?.watch;
+          // what arrives from the radios side: the total less what UDR3 sends itself
+          if (w?.floodPps != null) this.talkers.recordFlood(t, w.floodPps - (w.floodFromGatewayPps ?? 0));
+        }
       }
       this.history.add(samples);
       this.events = this.events.slice(0, 300);
@@ -357,6 +475,9 @@ export class Monitor extends EventEmitter {
       backboneMbps: c.backboneMbps ?? 60,
       trial: this.changes.trial,
       changes: this.changes.history.slice(0, 20),
+      talkers: this.talkerList(),
+      traces: this.traces.slice(0, 10),
+      traceRunning: this.traceRunning,
     };
   }
 
@@ -462,6 +583,20 @@ export class Monitor extends EventEmitter {
     this.syncGateways();
     if (!this.polling) this.schedule(1500);
     this.emit('change');
+  }
+}
+
+function readTraces(file: string): TraceResult[] {
+  try {
+    return fs
+      .readFileSync(file, 'utf8')
+      .split('\n')
+      .filter(Boolean)
+      .slice(-30)
+      .map((l) => JSON.parse(l) as TraceResult)
+      .reverse();
+  } catch {
+    return [];
   }
 }
 

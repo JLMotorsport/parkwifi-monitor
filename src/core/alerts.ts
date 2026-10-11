@@ -17,6 +17,19 @@ export interface AlertSink {
   event(a: AlertItem): void;
 }
 
+/**
+ * The radio a device's traffic passes through just before it: the previous radio in the backbone
+ * chain, or for anything else the first backbone radio at its site. Null for the first radio.
+ */
+export function parentOf(id: string, devices: DeviceCfg[], chain: string[]): string | null {
+  const i = chain.indexOf(id);
+  if (i > 0) return chain[i - 1];
+  if (i === 0) return null;
+  const d = devices.find((x) => x.id === id);
+  if (!d) return null;
+  return chain.find((c) => devices.find((x) => x.id === c)?.site === d.site) ?? null;
+}
+
 /** Broadcast + multicast packets/s on the radio port. After the mDNS fix the park ran at about 50. */
 export const FLOOD_WARN_PPS = 150;
 export const FLOOD_SERIOUS_PPS = 300;
@@ -126,7 +139,16 @@ export class AlertEngine {
    * @param pcFault the PC's own connection is bad this poll: ping-based checks are skipped
    * (neither raised nor cleared) because they would only measure this PC.
    */
-  evaluate(cfg: DeviceCfg, role: Role, s: Sample, prev: Sample | undefined, th: Thresholds, errorKind?: string, pcFault = false) {
+  evaluate(
+    cfg: DeviceCfg,
+    role: Role,
+    s: Sample,
+    prev: Sample | undefined,
+    th: Thresholds,
+    errorKind?: string,
+    pcFault = false,
+    parent?: { name: string; ping: PingResult },
+  ) {
     const name = cfg.name;
     const cond = (kind: string, bad: boolean, severity: Severity, title: string, detail: string, sustain = th.sustainPolls) =>
       this.check(cfg.id, name, s.t, kind, bad, severity, title, detail, sustain);
@@ -139,13 +161,22 @@ export class AlertEngine {
       cond('offline', offline, 'critical', `${name} is not responding`, `No ping replies from ${cfg.ip} and no airOS response`, 2);
       if (offline) return;
 
-      cond('loss', p.lossPct > th.lossPct, 'serious', `Packet loss to ${name}`, `${p.lossPct}% of ${p.sent} pings lost`);
+      // Judge each radio on what it adds on top of the radio before it, so one slow link raises one
+      // alert at the right place instead of one for every radio beyond it.
+      const pp = parent?.ping;
+      const parentLossy = !!pp && pp.received > 0 && pp.lossPct > th.lossPct;
+      const lossBad = p.lossPct > th.lossPct && !(parentLossy && p.lossPct - pp!.lossPct <= th.lossPct);
+      cond('loss', lossBad, 'serious', `Packet loss to ${name}`, `${p.lossPct}% of ${p.sent} pings lost${parentLossy ? ` (${pp!.lossPct}% already lost by ${parent!.name})` : ''}`);
+      const added = pp && pp.avg !== null && p.avg !== null ? Math.round(p.avg - pp.avg) : null;
+      const slow = p.avg !== null && (added !== null ? added > th.latencyMs || p.avg > th.latencyMs * 3 : p.avg > th.latencyMs);
       cond(
         'latency',
-        p.avg !== null && p.avg > th.latencyMs,
+        slow,
         'warning',
         `Slow replies from ${name}`,
-        `Average ${fmt(p.avg, ' ms')}, worst ${fmt(p.max, ' ms')} (limit ${th.latencyMs} ms)`,
+        added !== null
+          ? `Average ${fmt(p.avg, ' ms')}, worst ${fmt(p.max, ' ms')}. ${added > th.latencyMs ? `${added} ms of that is added after ${parent!.name}` : `Only ${Math.max(0, added)} ms is added after ${parent!.name}; the delay builds up before it`} (limit ${th.latencyMs} ms per hop).`
+          : `Average ${fmt(p.avg, ' ms')}, worst ${fmt(p.max, ' ms')} (limit ${th.latencyMs} ms)`,
       );
       cond(
         'api',

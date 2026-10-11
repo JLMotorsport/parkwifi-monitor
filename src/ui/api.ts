@@ -18,6 +18,7 @@ export const api = {
   speedTests: (id: string) => j<SpeedTestRecord[]>(`./api/speedtests?id=${encodeURIComponent(id)}`),
   speedTest: (b: { from: string; to: string; direction: 'dx' | 'tx' | 'rx'; duration: number; port: number }) =>
     j<SpeedTestRecord>('./api/speedtest', { method: 'POST', body: JSON.stringify(b) }),
+  trace: (id: string) => j<{ ok: boolean }>('./api/trace?id=' + encodeURIComponent(id), { method: 'POST' }),
   changeStart: (suggestion: string) => j<ChangeTrial>('./api/change/start', { method: 'POST', body: JSON.stringify({ suggestion }) }),
   changeKeep: () => j<ChangeTrial>('./api/change/keep', { method: 'POST' }),
   changeUndo: () => j<ChangeTrial>('./api/change/undo', { method: 'POST' }),

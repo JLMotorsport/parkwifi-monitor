@@ -457,3 +457,13 @@ details.card > summary::-webkit-details-marker { display: none; }
 .trial.on { border-color: var(--accent-line); box-shadow: 0 0 0 3px var(--accent-soft); }
 .checks { display: flex; flex-wrap: wrap; gap: 6px; }
 .checks .pill { white-space: normal; }
+
+/* ---- investigation: path tests ---- */
+.trace { display: grid; gap: 8px; }
+.trace-h { display: flex; align-items: center; gap: 10px; flex-wrap: wrap; }
+.trace-v { margin: 0; line-height: 1.5; max-width: 860px; }
+.trace tr.culprit td { background: var(--serious-bg); }
+.strip { display: inline-flex; gap: 1px; vertical-align: middle; }
+.strip i { width: 5px; height: 14px; border-radius: 1px; background: color-mix(in srgb, var(--good) 35%, transparent); }
+.strip i.spike { background: var(--warning); }
+.strip i.lost { background: var(--critical-ink); }

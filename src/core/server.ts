@@ -174,6 +174,13 @@ export function startServer(m: Monitor, uiDir: string, actions: AppActions = {})
             } catch (e) {
               return send(409, { error: (e as Error).message });
             }
+          case 'POST /api/trace': {
+            const id = url.searchParams.get('id') ?? '';
+            if (m.traceRunning) return send(409, { error: 'A path test is already running' });
+            // answers straight away; the result arrives with the next state update, 30 s later
+            void m.runTrace(id, 'manual').catch(() => undefined);
+            return send(202, { ok: true });
+          }
           case 'POST /api/gateway/test':
             return send(200, await m.testGateway(url.searchParams.get('id') ?? ''));
           case 'POST /api/poll':

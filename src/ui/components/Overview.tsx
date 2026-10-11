@@ -3,6 +3,7 @@ import { accessPoints, chainDevices, estInternet, goodShare, probeHealth, shareH
 import { duration, n } from '../format';
 import { AlertList } from './Alerts';
 import { BackboneLoad } from './BackboneLoad';
+import { TalkersCard } from './Investigate';
 import { Icon } from './Icon';
 import { HEALTH_LABEL, StatusIcon, worst, type Health } from './Pill';
 
@@ -93,6 +94,7 @@ export function Overview({ s, open, goto, latencyLimit }: Props) {
       </section>
 
       <BackboneLoad s={s} goSettings={() => goto('settings')} />
+      <TalkersCard s={s} open={open} />
 
       <div className="row2">
         <section className="card" style={{ flex: '2 1 560px' }}>

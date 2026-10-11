@@ -12,6 +12,12 @@ const tls = { key: fs.readFileSync(path.join(dir, 'key.pem')), cert: fs.readFile
 const USER = 'ubnt';
 const PASS = 'test-pass';
 const boot = Date.now();
+// MOCK_FLOOD=device: a Fire Stick on AP#1 broadcasts in waves; MOCK_FLOOD=1 or gw: UDR3 floods itself
+const FLOOD = process.env.MOCK_FLOOD ?? '';
+const FLOOD_DEVICE = '14:91:38:86:C9:D1';
+// packets broadcast so far by the flooding device: rate 100 + 80 sin(2 pi t / 300) a second
+const floodCount = (sec) => (FLOOD === 'device' ? 100 * sec + 80 * (300 / (2 * Math.PI)) * (1 - Math.cos((2 * Math.PI * sec) / 300)) : 0);
+const since = () => (Date.now() - boot) / 1000;
 
 const radios = {
   '127.0.0.21': { host: 'House-Lookout Sender (House)', model: 'NanoStation M5', mode: 'ap', wds: 1, freq: 5540, ch: 108, noise: -89, ccq: 991, up: 670000 },
@@ -120,9 +126,16 @@ for (const [ip, r] of Object.entries(radios)) {
         return res.end('{ "status" : 0, "message" : "Success." }');
       }
       if (req.url.startsWith('/sta.cgi')) {
-        const list = (r.sta ?? []).map(([mac, lastip, signal, tx, rx, ccq, lat]) => ({
-          mac, lastip, signal: Math.round(jitter(signal, 4)), tx, rx, ccq, txlatency: lat, uptime: 600 + Math.round((Date.now() - boot) / 1000), noisefloor: r.noise,
-        }));
+        const sec = since();
+        const list = (r.sta ?? []).map(([mac, lastip, signal, tx, rx, ccq, lat]) => {
+          const flooder = mac === FLOOD_DEVICE;
+          const sent = Math.round(flooder ? 0.7 * floodCount(sec) + 2 * sec : 2 * sec + (signal > -70 ? 6 * sec : 0));
+          const recv = Math.round(flooder ? 0.5 * sec : 20 * sec);
+          return {
+            mac, lastip, signal: Math.round(jitter(signal, 4)), tx, rx, ccq, txlatency: lat, uptime: 600 + Math.round(sec), noisefloor: r.noise,
+            stats: { rx_data: sent, rx_bytes: sent * (flooder ? 1380 : 300), rx_pps: 0, tx_data: recv, tx_bytes: recv * 900, tx_pps: 0 },
+          };
+        });
         return res.end(JSON.stringify(list));
       }
       res.end('{}');
@@ -196,9 +209,9 @@ for (const [ip, r] of Object.entries(radios)) {
     ctr.p3rx += (up * 1e6 * dt) / 8;
     ctr.wrx += ((down + 20) * 1e6 * dt) / 8;
     ctr.wtx += ((up + 3) * 1e6 * dt) / 8;
-    // broadcast/multicast packets; MOCK_FLOOD=1 simulates an mDNS storm from the gateway
-    ctr.p3txf = (ctr.p3txf ?? 0) + (process.env.MOCK_FLOOD ? 220 : 20) * dt;
-    ctr.p3rxf = (ctr.p3rxf ?? 0) + 25 * dt;
+    // broadcast/multicast packets: from UDR3 itself (tx) and from devices on the radios (rx)
+    ctr.p3txf = (ctr.p3txf ?? 0) + (FLOOD === '1' || FLOOD === 'gw' ? 220 : 20) * dt;
+    ctr.p3rxf = 25 * since() + floodCount(since());
   };
   const send = (res, data) => { res.writeHead(200, { 'Content-Type': 'application/json' }); res.end(JSON.stringify({ meta: { rc: 'ok' }, data })); };
   https.createServer(tls, (req, res) => {
@@ -230,7 +243,13 @@ for (const [ip, r] of Object.entries(radios)) {
         { _id: 'n2', name: 'House', purpose: 'corporate', ip_subnet: '192.168.10.1/24', dhcpd_enabled: true, dhcpd_start: '192.168.10.6', dhcpd_stop: '192.168.10.254', dhcpd_leasetime: 86400 },
         { _id: 'w1', name: 'Internet 1', purpose: 'wan' },
       ]);
-      if (p === 'stat/sta') return send(res, [...Array(91).fill({ network_id: 'n1' }), ...Array(14).fill({ network_id: 'n2' })]);
+      if (p === 'stat/sta')
+        return send(res, [
+          { network_id: 'n1', mac: '14:91:38:86:c9:d1', hostname: 'Fire-TV-Lounge', oui: 'Amazon Technologies Inc.', ip: '192.168.2.19' },
+          { network_id: 'n1', mac: 'aa:42:a1:05:28:4c', oui: 'TP-Link', ip: '192.168.2.218' },
+          ...Array(89).fill({ network_id: 'n1' }),
+          ...Array(14).fill({ network_id: 'n2' }),
+        ]);
       res.writeHead(404); res.end('{}');
     });
   }).listen(443, ip, () => console.log('mock UniFi gateway', ip));

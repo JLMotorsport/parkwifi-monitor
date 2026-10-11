@@ -94,7 +94,7 @@ describe('flood alert', () => {
     const s = advise({ devices: [], chain: [], events: [], thresholds: th, now: 1, gateway: { id: 'gw:udr3', name: 'UDR3', stats: gw(200, 20), peakDown95: null, peakUp95: null, samples: 0, capacity: 60 } });
     const f = s.find((x) => x.kind === 'flood')!;
     expect(f.severity).toBe('warning');
-    expect(f.fix).toContain('MAC ACL');
+    expect(f.fix).toContain('Who is sending the most');
   });
 });
 
