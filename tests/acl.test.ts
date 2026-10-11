@@ -15,7 +15,8 @@ function runOn(cfg: string, cmds: string[]): string {
   const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'pwm-acl-'));
   const file = path.join(dir, 'system.cfg');
   fs.writeFileSync(file, cfg);
-  execFileSync('sh', ['-c', ['set -e', ...cmds].join('\n').replaceAll(CFG, file)]);
+  // forward slashes so Git Bash's sh on Windows (the release build) reads the path too
+  execFileSync('sh', ['-c', ['set -e', ...cmds].join('\n').replaceAll(CFG, file.replace(/\\/g, '/'))]);
   const out = fs.readFileSync(file, 'utf8');
   fs.rmSync(dir, { recursive: true, force: true });
   return out;
