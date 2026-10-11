@@ -18,6 +18,9 @@ export const api = {
   speedTests: (id: string) => j<SpeedTestRecord[]>(`./api/speedtests?id=${encodeURIComponent(id)}`),
   speedTest: (b: { from: string; to: string; direction: 'dx' | 'tx' | 'rx'; duration: number; port: number }) =>
     j<SpeedTestRecord>('./api/speedtest', { method: 'POST', body: JSON.stringify(b) }),
+  block: (mac: string, apIds?: string[]) => j<unknown>('./api/block', { method: 'POST', body: JSON.stringify({ mac, apIds }) }),
+  unblock: (mac: string, apIds?: string[]) => j<unknown>('./api/unblock', { method: 'POST', body: JSON.stringify({ mac, apIds }) }),
+  aclRefresh: () => j<unknown>('./api/acl/refresh', { method: 'POST' }),
   trace: (id: string) => j<{ ok: boolean }>('./api/trace?id=' + encodeURIComponent(id), { method: 'POST' }),
   changeStart: (suggestion: string) => j<ChangeTrial>('./api/change/start', { method: 'POST', body: JSON.stringify({ suggestion }) }),
   changeKeep: () => j<ChangeTrial>('./api/change/keep', { method: 'POST' }),

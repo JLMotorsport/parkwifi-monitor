@@ -16,7 +16,11 @@ const boot = Date.now();
 const FLOOD = process.env.MOCK_FLOOD ?? '';
 const FLOOD_DEVICE = '14:91:38:86:C9:D1';
 // packets broadcast so far by the flooding device: rate 100 + 80 sin(2 pi t / 300) a second
-const floodCount = (sec) => (FLOOD === 'device' ? 100 * sec + 80 * (300 / (2 * Math.PI)) * (1 - Math.cos((2 * Math.PI * sec) / 300)) : 0);
+let floodStoppedAt = null; // seconds since boot when the flooding device was blocked
+const floodCount = (sec0) => {
+  const sec = floodStoppedAt === null ? sec0 : Math.min(sec0, floodStoppedAt);
+  return FLOOD === 'device' ? 100 * sec + 80 * (300 / (2 * Math.PI)) * (1 - Math.cos((2 * Math.PI * sec) / 300)) : 0;
+};
 const since = () => (Date.now() - boot) / 1000;
 
 const radios = {
@@ -126,8 +130,11 @@ for (const [ip, r] of Object.entries(radios)) {
         return res.end('{ "status" : 0, "message" : "Success." }');
       }
       if (req.url.startsWith('/sta.cgi')) {
+        applyCfg(r);
         const sec = since();
-        const list = (r.sta ?? []).map(([mac, lastip, signal, tx, rx, ccq, lat]) => {
+        // a MAC ACL is enforced like airOS does: deny list drops those MACs, allow list keeps only them
+        const visible = (r.sta ?? []).filter(([mac]) => (r.aclPolicy === 'deny' ? !r.acl.has(mac) : r.aclPolicy === 'allow' ? r.acl.has(mac) : true));
+        const list = visible.map(([mac, lastip, signal, tx, rx, ccq, lat]) => {
           const flooder = mac === FLOOD_DEVICE;
           const sent = Math.round(flooder ? 0.7 * floodCount(sec) + 2 * sec : 2 * sec + (signal > -70 ? 6 * sec : 0));
           const recv = Math.round(flooder ? 0.5 * sec : 20 * sec);
@@ -158,6 +165,10 @@ function applyCfg(r) {
     const kv = Object.fromEntries(fs.readFileSync(path.join(r.dir, 'applied.cfg'), 'utf8').split('\n').filter(Boolean).map((l) => l.split('=')));
     if (kv['radio.1.txpower']) r.txpower = Number(kv['radio.1.txpower']);
     if (kv['radio.1.freq']) { r.freq = Number(kv['radio.1.freq']); r.ch = (r.freq - 2407) / 5; }
+    r.acl = new Set(Object.entries(kv).filter(([k, v]) => /^wireless\.1\.mac_acl\.\d+\.mac$/.test(k) && kv[k.replace(/mac$/, 'status')] === 'enabled').map(([, v]) => v.toUpperCase()));
+    r.aclPolicy = kv['wireless.1.mac_acl.status'] === 'enabled' ? kv['wireless.1.mac_acl.policy'] : null;
+    if (r.aclPolicy === 'deny' && r.acl.has(FLOOD_DEVICE) && floodStoppedAt === null) floodStoppedAt = since();
+    if (r.aclPolicy === 'deny' && !r.acl.has(FLOOD_DEVICE) && r.sta?.some(([m]) => m === FLOOD_DEVICE) && floodStoppedAt !== null) floodStoppedAt = null;
   } catch { /* not applied yet */ }
 }
 for (const [ip, r] of Object.entries(radios)) {
@@ -165,7 +176,14 @@ for (const [ip, r] of Object.entries(radios)) {
   r.dir = path.join(ROOT, ip);
   fs.rmSync(r.dir, { recursive: true, force: true });
   fs.mkdirSync(path.join(r.dir, 'tmp'), { recursive: true });
-  const cfg = `aaa.1.status=enabled\nradio.1.mode=master\nradio.1.freq=${r.freq}\nradio.1.txpower=${r.txpower ?? 20}\nradio.1.chanbw=20\nwireless.1.ssid=Lookout & Monks Meadow\n`;
+  // AP#3 uses an allow list (blocking must be refused there); AP#7 already blocks one MAC, set by hand
+  const acl =
+    ip === '127.0.0.33'
+      ? 'wireless.1.mac_acl.status=enabled\nwireless.1.mac_acl.policy=allow\nwireless.1.mac_acl.1.mac=60:02:B4:B8:32:A9\nwireless.1.mac_acl.1.status=enabled\n'
+      : ip === '127.0.0.37'
+        ? 'wireless.1.mac_acl.status=enabled\nwireless.1.mac_acl.policy=deny\nwireless.1.mac_acl.1.mac=70:54:B4:4C:D3:E9\nwireless.1.mac_acl.1.status=enabled\n'
+        : '';
+  const cfg = `aaa.1.status=enabled\nradio.1.mode=master\nradio.1.freq=${r.freq}\nradio.1.txpower=${r.txpower ?? 20}\nradio.1.chanbw=20\nwireless.1.ssid=Lookout & Monks Meadow\n${acl}`;
   fs.writeFileSync(path.join(r.dir, 'tmp/system.cfg'), cfg);
   fs.writeFileSync(path.join(r.dir, 'applied.cfg'), cfg);
   fs.writeFileSync(path.join(r.dir, 'softrestart'), `#!/bin/sh\necho "$(date +%T) softrestart $1" >> ${r.dir}/log\ncp ${r.dir}/tmp/system.cfg ${r.dir}/applied.cfg\n`, { mode: 0o755 });

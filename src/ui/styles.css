@@ -467,3 +467,4 @@ details.card > summary::-webkit-details-marker { display: none; }
 .strip i { width: 5px; height: 14px; border-radius: 1px; background: color-mix(in srgb, var(--good) 35%, transparent); }
 .strip i.spike { background: var(--warning); }
 .strip i.lost { background: var(--critical-ink); }
+.job { display: grid; gap: 8px; }

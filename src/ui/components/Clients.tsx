@@ -1,3 +1,4 @@
+import { BlockButton } from './Blocking';
 import type { AppState, Thresholds } from '../../core/types';
 import { accessPoints } from '../derive';
 import { duration, n } from '../format';
@@ -27,6 +28,7 @@ export function ClientsPage({ s, open, thresholds, weakOnly, query }: { s: AppSt
             <th className="r">Latency</th>
             <th className="r">Distance</th>
             <th className="r">Connected</th>
+            <th />
           </tr>
         </thead>
         <tbody>
@@ -48,6 +50,9 @@ export function ClientsPage({ s, open, thresholds, weakOnly, query }: { s: AppSt
               <td className="r dim">{n(st.latency, ' ms')}</td>
               <td className="r dim">{st.distanceM ? `${(st.distanceM / 1000).toFixed(1)} km` : '–'}</td>
               <td className="r dim">{duration(st.uptime)}</td>
+              <td className="r">
+                <BlockButton s={s} mac={st.mac} apId={ap.cfg.id} apName={ap.cfg.name} />
+              </td>
             </tr>
           ))}
         </tbody>

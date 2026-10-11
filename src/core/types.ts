@@ -183,6 +183,36 @@ export interface Talker {
   suspect: string | null;
 }
 
+export interface BlockStep {
+  apId: string;
+  apName: string;
+  state: 'waiting' | 'checking' | 'applying' | 'verifying' | 'done' | 'skipped' | 'failed' | 'undone';
+  message: string;
+}
+export interface BlockJob {
+  id: string;
+  kind: 'block' | 'unblock';
+  mac: string;
+  label: string;
+  startedAt: number;
+  endedAt?: number;
+  steps: BlockStep[];
+}
+export interface BlockedDevice {
+  mac: string;
+  label: string;
+  aps: { apId: string; apName: string }[];
+}
+export interface AclState {
+  job: BlockJob | null;
+  jobs: BlockJob[];
+  blocked: BlockedDevice[];
+  /** APs that couldn't be read, or where blocking isn't possible, and why */
+  notes: { apId: string; apName: string; note: string }[];
+  refreshedAt: number | null;
+  refreshing: boolean;
+}
+
 export interface TraceHop {
   id: string;
   name: string;
@@ -367,6 +397,7 @@ export interface AppState {
   backboneMbps: number;
   trial: ChangeTrial | null;
   talkers: Talker[];
+  acl: AclState;
   traces: TraceResult[];
   traceRunning: string | null;
   changes: ChangeTrial[];

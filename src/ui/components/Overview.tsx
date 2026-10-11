@@ -4,6 +4,7 @@ import { duration, n } from '../format';
 import { AlertList } from './Alerts';
 import { BackboneLoad } from './BackboneLoad';
 import { TalkersCard } from './Investigate';
+import { BlockedCard } from './Blocking';
 import { Icon } from './Icon';
 import { HEALTH_LABEL, StatusIcon, worst, type Health } from './Pill';
 
@@ -95,6 +96,7 @@ export function Overview({ s, open, goto, latencyLimit }: Props) {
 
       <BackboneLoad s={s} goSettings={() => goto('settings')} />
       <TalkersCard s={s} open={open} />
+      {(s.acl.job || s.acl.blocked.length > 0 || s.talkers.some((t) => t.suspect)) && <BlockedCard s={s} />}
 
       <div className="row2">
         <section className="card" style={{ flex: '2 1 560px' }}>

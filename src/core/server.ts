@@ -174,6 +174,19 @@ export function startServer(m: Monitor, uiDir: string, actions: AppActions = {})
             } catch (e) {
               return send(409, { error: (e as Error).message });
             }
+          case 'POST /api/block':
+          case 'POST /api/unblock': {
+            const b = (await readBody(req)) as { mac?: string; apIds?: string[] };
+            try {
+              const kind = url.pathname.endsWith('unblock') ? 'unblock' : 'block';
+              return send(202, m.blocks.start(kind, String(b.mac ?? ''), Array.isArray(b.apIds) ? b.apIds.map(String) : undefined));
+            } catch (e) {
+              return send(409, { error: (e as Error).message });
+            }
+          }
+          case 'POST /api/acl/refresh':
+            void m.blocks.refresh();
+            return send(202, { ok: true });
           case 'POST /api/trace': {
             const id = url.searchParams.get('id') ?? '';
             if (m.traceRunning) return send(409, { error: 'A path test is already running' });

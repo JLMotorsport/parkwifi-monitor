@@ -4,6 +4,7 @@ import { advise, channelQuality, isAccessPoint, type ChannelQuality } from './ad
 import { AirOSSsh } from './airos-ssh';
 import { AlertEngine, parentOf, pcFault, roleOf } from './alerts';
 import { TalkerTracker } from './flood';
+import { BlockManager } from './blocker';
 import { analyseTrace } from './trace';
 import fs from 'fs';
 import path from 'path';
@@ -54,6 +55,7 @@ export class Monitor extends EventEmitter {
   private lastAdvice: ReturnType<Monitor['adviceInput']> | null = null;
   private chanHist: { at: number; data: Record<string, ChannelQuality> } | null = null;
   readonly talkers = new TalkerTracker();
+  readonly blocks: BlockManager;
   traces: TraceResult[] = [];
   traceRunning: string | null = null;
   private lastAutoTrace = 0;
@@ -80,6 +82,35 @@ export class Monitor extends EventEmitter {
         this.events.unshift(a);
         if (this.cfg.config.notifications) this.hooks.notify?.(a);
       },
+    });
+    this.blocks = new BlockManager(dataDir, {
+      aps: () =>
+        this.deviceStates()
+          .filter((d) => isAccessPoint(d, this.cfg.config.chain))
+          .map((d) => ({ id: d.cfg.id, name: d.cfg.name, ip: d.cfg.ip })),
+      ssh: (ip) => new AirOSSsh(ip, this.cfg.config.username, this.cfg.password(), this.cfg.config.sshPort ?? 22),
+      stations: async (apId) => {
+        const d = this.cfg.config.devices.find((x) => x.id === apId);
+        if (!d) return null;
+        try {
+          const st = (await this.client(d).stations()).parsed;
+          this.live.set(d.id, st);
+          return st;
+        } catch {
+          this.clients.delete(d.id);
+          return null;
+        }
+      },
+      liveCount: (apId) => this.latest.get(apId)?.stations?.count ?? null,
+      label: (mac) => {
+        for (const p of this.gateways.values()) {
+          const i = p.clients.get(mac);
+          if (i) return [i.name, i.vendor].filter(Boolean).join(', ');
+        }
+        return '';
+      },
+      changed: () => this.emit('change'),
+      log: (msg) => console.log(`[blocks] ${msg}`),
     });
     this.tracesFile = path.join(dataDir, 'traces.jsonl');
     this.traces = readTraces(this.tracesFile);
@@ -273,6 +304,8 @@ export class Monitor extends EventEmitter {
   start() {
     this.schedule(2000);
     this.syncGateways();
+    // learn what each AP already blocks, once the first poll has found the APs
+    setTimeout(() => void this.blocks.refresh(), 20_000);
     void this.changes.recover();
   }
 
@@ -476,6 +509,7 @@ export class Monitor extends EventEmitter {
       trial: this.changes.trial,
       changes: this.changes.history.slice(0, 20),
       talkers: this.talkerList(),
+      acl: this.blocks.state,
       traces: this.traces.slice(0, 10),
       traceRunning: this.traceRunning,
     };

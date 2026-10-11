@@ -3,6 +3,7 @@ import type { AppState, Talker, TraceResult } from '../../core/types';
 import { api } from '../api';
 import { ago, clock, n } from '../format';
 import { StatusIcon } from './Pill';
+import { BlockButton, blockedOn } from './Blocking';
 
 const SPIKE_MS = 50;
 
@@ -10,7 +11,7 @@ const talkerLabel = (t: Talker) => t.name || t.vendor || 'Unknown device';
 const matchLabel = (m: number | null) => (m === null ? 'Too early' : m >= 0.6 ? 'Strong' : m >= 0.3 ? 'Some' : 'No');
 
 /** Devices ranked by how much they send, with likely flood sources first. */
-export function TalkersCard({ s, open }: { s: AppState; open: (id: string) => void }) {
+export function TalkersCard({ s, open, toast }: { s: AppState; open: (id: string) => void; toast?: (m: string) => void }) {
   const [copied, setCopied] = useState('');
   const list = s.talkers.slice(0, 10);
   const flood = s.gateways.find((g) => g.cfg.enabled)?.latest?.gw?.watch?.floodPps ?? null;
@@ -43,6 +44,7 @@ export function TalkersCard({ s, open }: { s: AppState; open: (id: string) => vo
                 <th className="r">Gets /s</th>
                 <th className="r">Follows flood</th>
                 <th>Verdict</th>
+                <th />
               </tr>
             </thead>
             <tbody>
@@ -77,12 +79,15 @@ export function TalkersCard({ s, open }: { s: AppState; open: (id: string) => vo
                           Likely flood source
                         </span>
                         <div className="hint" style={{ marginTop: 4 }}>
-                          {t.suspect} Block it on {t.apName}: Wireless, MAC ACL, Deny.
+                          {t.suspect}
                         </div>
                       </>
                     ) : (
                       <span className="faint">Normal</span>
                     )}
+                  </td>
+                  <td className="r">
+                    {(t.suspect || blockedOn(s, t.mac).length > 0) && <BlockButton s={s} mac={t.mac} apId={t.apId} apName={t.apName} toast={toast} />}
                   </td>
                 </tr>
               ))}

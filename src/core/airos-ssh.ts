@@ -169,6 +169,63 @@ export class AirOSSsh {
   }
 }
 
+export interface AclRead {
+  text: string;
+  canApply: boolean;
+  pending: boolean;
+  problems: string[];
+}
+
+/** MAC ACL steps. The edits come from planBlock/planUnblock, which only build them from validated MACs. */
+export class AclSsh {
+  constructor(private ssh: AirOSSsh, private selftestWaitMs = 5000) {}
+
+  /** Read the ACL lines and check the radio can apply and undo by itself. Changes nothing. */
+  async read(selftest = true): Promise<AclRead> {
+    const out = await this.ssh.run(
+      `grep '^wireless\\.1\\.mac_acl\\.' ${CFG}; [ -x ${SOFTRESTART} ] && echo '@SOFTRESTART'; [ -f ${PENDING} ] && echo '@PENDING'; ` +
+        (selftest ? `rm -f ${SELFTEST}; ${bg(`sleep 3; echo ok > ${SELFTEST}`)} ` : '') +
+        `echo '@END'`,
+    );
+    const problems: string[] = [];
+    if (!out.includes('@END')) problems.push('The radio did not run the check command.');
+    if (!out.includes('@SOFTRESTART')) problems.push(`${SOFTRESTART} is missing, so the radio can't apply settings this way.`);
+    if (selftest) {
+      await new Promise((r) => setTimeout(r, this.selftestWaitMs));
+      const st = await this.ssh.run(`cat ${SELFTEST} 2>/dev/null; rm -f ${SELFTEST}`);
+      if (!st.includes('ok')) problems.push('A test timer on the radio did not survive the SSH session closing, so the on-radio undo would not run.');
+    }
+    return { text: out, canApply: problems.length === 0, pending: out.includes('@PENDING'), problems };
+  }
+
+  /** Write the edits, arm the radio's own undo for `seconds`, then restart its wireless. */
+  async apply(edits: string[], check: string[], seconds: number, token: string): Promise<void> {
+    if (!/^[a-f0-9]{8,32}$/.test(token)) throw new SshError('bad token');
+    const secs = Math.round(seconds);
+    if (secs < 60 || secs > 3600) throw new SshError('undo timer must be 1 to 60 minutes');
+    const undo = `if [ "$(cat ${PENDING} 2>/dev/null)" = "${token}" ]; then cp ${BACKUP} ${CFG} && rm -f ${PENDING} && ${SOFTRESTART} save; fi`;
+    const out = await this.ssh.run(
+      ['set -e', `cp ${CFG} ${BACKUP}`, ...edits, ...check, `echo ${token} > ${PENDING}`, bg(`sleep ${secs}; ${undo}`), bg(`sleep 1; ${SOFTRESTART} save`), 'echo @APPLIED'].join('\n'),
+    );
+    if (!out.includes('@APPLIED')) {
+      // a failed check part way: put the file back before anything was applied
+      await this.ssh.run(`[ -f ${BACKUP} ] && cp ${BACKUP} ${CFG}; echo @OK`).catch(() => undefined);
+      throw new SshError('The radio did not take the change (nothing was applied).');
+    }
+  }
+
+  /** Keep: cancel the undo timer. */
+  async confirm(token: string): Promise<void> {
+    return this.ssh.confirm(token);
+  }
+
+  /** Undo now with explicit edits, so it works even if the radio restarted and lost its backup. */
+  async undo(edits: string[]): Promise<void> {
+    const out = await this.ssh.run(['set -e', `rm -f ${PENDING}`, ...edits, bg(`sleep 1; ${SOFTRESTART} save`), 'echo @RESTORED'].join('\n'));
+    if (!out.includes('@RESTORED')) throw new SshError('The radio did not accept the undo.');
+  }
+}
+
 function sshMessage(e: Error & { level?: string; code?: string }, host: string, port: number) {
   if (e.level === 'client-authentication') return `SSH login to ${host} was refused (wrong password, or SSH logins are off on the radio)`;
   if (e.code === 'ECONNREFUSED') return `${host} refused SSH on port ${port}. Turn on SSH Server under the radio's Services tab.`;
