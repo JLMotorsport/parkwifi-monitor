@@ -104,6 +104,23 @@ export class UniFiClient {
     return Array.isArray(j.data) ? j.data : [];
   }
 
+  /** POST to the Network application's API, e.g. stat/stadpi. */
+  async post(path: string, body: unknown, retry = true): Promise<unknown[]> {
+    if (!this.cookie) await this.login();
+    const r = await this.request('POST', `/proxy/network/api/s/default/${path}`, body);
+    if ((r.status === 401 || r.status === 403) && retry) {
+      await this.login();
+      return this.post(path, body, false);
+    }
+    if (r.status !== 200) throw new UniFiError(`${path}: HTTP ${r.status}`, 'api');
+    try {
+      const j = JSON.parse(r.text) as { data?: unknown[] };
+      return Array.isArray(j.data) ? j.data : [];
+    } catch {
+      throw new UniFiError(`${path}: not JSON`, 'api');
+    }
+  }
+
   async raw(): Promise<Raw> {
     const health = await this.get('stat/health'); // first call does the login
     const [devices, networks, clients] = await Promise.all([this.get('stat/device'), this.get('rest/networkconf'), this.get('stat/sta')]);

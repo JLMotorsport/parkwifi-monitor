@@ -22,6 +22,15 @@ const floodCount = (sec0) => {
   return FLOOD === 'device' ? 100 * sec + 80 * (300 / (2 * Math.PI)) * (1 - Math.cos((2 * Math.PI * sec) / 300)) : 0;
 };
 const since = () => (Date.now() - boot) / 1000;
+// running byte counts for a few devices on UDR3: an office PC that downloads at ~100 Mbps for 45 s
+// every 3 minutes, a TV streaming 8 Mbps, and a phone ticking over
+const usageNow = () => {
+  const sec = since();
+  const cycles = Math.floor(sec / 180);
+  const inBurst = Math.min(45, sec % 180);
+  const pcBurstSecs = cycles * 45 + inBurst;
+  return { pc: Math.round((pcBurstSecs * 100e6 + sec * 0.5e6) / 8), tv: Math.round((sec * 8e6) / 8), small: Math.round((sec * 0.3e6) / 8) };
+};
 
 const radios = {
   '127.0.0.21': { host: 'House-Lookout Sender (House)', model: 'NanoStation M5', mode: 'ap', wds: 1, freq: 5540, ch: 108, noise: -89, ccq: 991, up: 670000 },
@@ -225,7 +234,7 @@ for (const [ip, r] of Object.entries(radios)) {
     const up = 1.5 + Math.random() * 3;
     ctr.p3tx += (down * 1e6 * dt) / 8;
     ctr.p3rx += (up * 1e6 * dt) / 8;
-    ctr.wrx += ((down + 20) * 1e6 * dt) / 8;
+    ctr.wrx += ((2 + Math.random() * 3) * 1e6 * dt) / 8; // background; the named devices are added on top
     ctr.wtx += ((up + 3) * 1e6 * dt) / 8;
     // broadcast/multicast packets: from UDR3 itself (tx) and from devices on the radios (rx)
     ctr.p3txf = (ctr.p3txf ?? 0) + (FLOOD === '1' || FLOOD === 'gw' ? 220 : 20) * dt;
@@ -254,20 +263,31 @@ for (const [ip, r] of Object.entries(radios)) {
           { port_idx: 3, name: 'Lookout&Monks', up: true, speed: 100, rx_bytes: Math.round(ctr.p3rx), tx_bytes: Math.round(ctr.p3tx), tx_multicast: Math.round(ctr.p3txf ?? 0), tx_broadcast: 0, rx_multicast: Math.round(ctr.p3rxf ?? 0), rx_broadcast: 0 },
           { port_idx: 4, name: 'Port 4', up: false, speed: 0, rx_bytes: 0, tx_bytes: 0 },
         ],
-        wan1: { rx_bytes: Math.round(ctr.wrx), tx_bytes: Math.round(ctr.wtx) },
+        wan1: (() => { const u = usageNow(); return { rx_bytes: Math.round(ctr.wrx + u.pc + u.tv + u.small), tx_bytes: Math.round(ctr.wtx) }; })(),
       }]);
       if (p === 'rest/networkconf') return send(res, [
         { _id: 'n1', name: 'Lookout&Monks', purpose: 'corporate', ip_subnet: '192.168.2.1/24', dhcpd_enabled: true, dhcpd_start: '192.168.2.100', dhcpd_stop: '192.168.2.199', dhcpd_leasetime: 86400 },
         { _id: 'n2', name: 'House', purpose: 'corporate', ip_subnet: '192.168.10.1/24', dhcpd_enabled: true, dhcpd_start: '192.168.10.6', dhcpd_stop: '192.168.10.254', dhcpd_leasetime: 86400 },
         { _id: 'w1', name: 'Internet 1', purpose: 'wan' },
       ]);
-      if (p === 'stat/sta')
+      if (p === 'stat/sta') {
+        const u = usageNow();
         return send(res, [
-          { network_id: 'n1', mac: '14:91:38:86:c9:d1', hostname: 'Fire-TV-Lounge', oui: 'Amazon Technologies Inc.', ip: '192.168.2.19' },
-          { network_id: 'n1', mac: 'aa:42:a1:05:28:4c', oui: 'TP-Link', ip: '192.168.2.218' },
+          { network_id: 'n1', mac: '14:91:38:86:c9:d1', hostname: 'Fire-TV-Lounge', oui: 'Amazon Technologies Inc.', ip: '192.168.2.19', tx_bytes: u.tv, rx_bytes: u.tv / 40 },
+          { network_id: 'n2', mac: '3c:52:82:aa:bb:01', hostname: 'Office-PC', oui: 'Dell Inc.', ip: '192.168.10.20', 'wired-tx_bytes': u.pc, 'wired-rx_bytes': u.pc / 50 },
+          { network_id: 'n1', mac: 'aa:42:a1:05:28:4c', oui: 'TP-Link', ip: '192.168.2.218', tx_bytes: u.small, rx_bytes: u.small / 3 },
           ...Array(89).fill({ network_id: 'n1' }),
           ...Array(14).fill({ network_id: 'n2' }),
         ]);
+      }
+      if (p === 'stat/stadpi') {
+        // traffic identification: the PC's bursts are software updates, the TV streams
+        const u = usageNow();
+        return send(res, [
+          { mac: '3c:52:82:aa:bb:01', by_app: [{ app: 3, cat: 14, rx_bytes: u.pc * 0.97, tx_bytes: u.pc / 50 }, { app: 7, cat: 13, rx_bytes: u.pc * 0.03, tx_bytes: 0 }] },
+          { mac: '14:91:38:86:c9:d1', by_app: [{ app: 1, cat: 4, rx_bytes: u.tv, tx_bytes: u.tv / 40 }] },
+        ]);
+      }
       res.writeHead(404); res.end('{}');
     });
   }).listen(443, ip, () => console.log('mock UniFi gateway', ip));

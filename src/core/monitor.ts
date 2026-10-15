@@ -13,7 +13,7 @@ import { GatewayPoller } from './gateway';
 import { ConfigStore, SecretBox, slug } from './config';
 import { ping, pingSeries, reach } from './ping';
 import { HistoryStore } from './store';
-import type { AlertItem, AppState, DeviceCfg, DeviceState, Sample, SpeedTestRecord, Station, TraceResult, UpdateInfo } from './types';
+import type { AlertItem, AppState, BusyMoment, DeviceCfg, DeviceState, Sample, SpeedTestRecord, Station, TraceResult, UpdateInfo } from './types';
 
 async function pool<T, R>(items: T[], limit: number, fn: (t: T) => Promise<R>): Promise<R[]> {
   const out: R[] = new Array(items.length);
@@ -57,6 +57,9 @@ export class Monitor extends EventEmitter {
   readonly talkers = new TalkerTracker();
   readonly blocks: BlockManager;
   traces: TraceResult[] = [];
+  /** moments the internet download went over the spike level, newest first, with who did it */
+  busy: BusyMoment[] = [];
+  private busyFile: string;
   traceRunning: string | null = null;
   private lastAutoTrace = 0;
   private tracesFile: string;
@@ -112,6 +115,8 @@ export class Monitor extends EventEmitter {
       changed: () => this.emit('change'),
       log: (msg) => console.log(`[blocks] ${msg}`),
     });
+    this.busyFile = path.join(dataDir, 'busy.jsonl');
+    this.busy = readJsonl<BusyMoment>(this.busyFile, 500);
     this.tracesFile = path.join(dataDir, 'traces.jsonl');
     this.traces = readTraces(this.tracesFile);
     try {
@@ -176,6 +181,24 @@ export class Monitor extends EventEmitter {
       channelHistory: this.channelHistory(devices),
       talkers: this.talkerList(),
     };
+  }
+
+  /** Log the minute's busiest moment, with the devices behind it, when it passes the spike level. */
+  private noteBusy(gatewayId: string, gatewayName: string, s: Sample) {
+    const p = s.gw?.peak;
+    const limit = this.cfg.config.spikeMbps ?? 40;
+    if (!p || p.totalDown < limit || !p.clients.length) return;
+    const m: BusyMoment = { t: p.t, gatewayId, gatewayName, totalDown: p.totalDown, clients: p.clients };
+    this.busy.unshift(m);
+    // keep a month of them in memory; the file is trimmed when it gets large
+    const cut = Date.now() - (this.cfg.config.retentionDays ?? 30) * 86400_000;
+    this.busy = this.busy.filter((x) => x.t >= cut).slice(0, 2000);
+    try {
+      fs.appendFileSync(this.busyFile, JSON.stringify(m) + '\n');
+      if (fs.statSync(this.busyFile).size > 3_000_000) fs.writeFileSync(this.busyFile, [...this.busy].reverse().map((x) => JSON.stringify(x)).join('\n') + '\n');
+    } catch {
+      /* best effort */
+    }
   }
 
   /** Devices ranked by how much they send, named from UDR3's client list where possible. */
@@ -392,6 +415,7 @@ export class Monitor extends EventEmitter {
         const g = c.gateways?.find((x) => x.id === id);
         if (g?.enabled) {
           this.alerts.gateway('gw:' + id, g.name, s.gw, t, c.thresholds);
+          this.noteBusy('gw:' + id, g.name, s);
           const w = s.gw?.watch;
           // what arrives from the radios side: the total less what UDR3 sends itself
           if (w?.floodPps != null) this.talkers.recordFlood(t, w.floodPps - (w.floodFromGatewayPps ?? 0));
@@ -509,6 +533,8 @@ export class Monitor extends EventEmitter {
       trial: this.changes.trial,
       changes: this.changes.history.slice(0, 20),
       talkers: this.talkerList(),
+      busy: this.busy.slice(0, 50),
+      spikeMbps: c.spikeMbps ?? 40,
       acl: this.blocks.state,
       traces: this.traces.slice(0, 10),
       traceRunning: this.traceRunning,
@@ -617,6 +643,20 @@ export class Monitor extends EventEmitter {
     this.syncGateways();
     if (!this.polling) this.schedule(1500);
     this.emit('change');
+  }
+}
+
+function readJsonl<T>(file: string, keep: number): T[] {
+  try {
+    return fs
+      .readFileSync(file, 'utf8')
+      .split('\n')
+      .filter(Boolean)
+      .slice(-keep)
+      .map((l) => JSON.parse(l) as T)
+      .reverse();
+  } catch {
+    return [];
   }
 }
 

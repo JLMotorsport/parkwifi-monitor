@@ -1,11 +1,14 @@
 // Polls one UniFi gateway every 15 seconds so short bursts on the radio-feeding port are caught,
 // then hands the monitor one sample per main poll: last readings plus the minute's average and peak.
 import { UniFiClient, UniFiError, parseStats, pickWatchPort, readCounters, gatewayDevice, type Counters } from './unifi';
+import { clientBytes, clientRates, dpiDelta, parseDpi, summariseMinute, type ClientBytes, type ClientRate, type Reading } from './usage';
 import type { GatewayCfg, GatewayStats, Sample } from './types';
 
 const FAST_MS = 15_000;
 const AUTH_BACKOFF_MS = 10 * 60_000;
 const NET_BACKOFF_MS = 60_000;
+/** Read traffic identification every fourth reading (once a minute); it is a heavier request. */
+const DPI_EVERY = 4;
 
 /** Name, maker and address for each device UDR3 knows, keyed by upper-case MAC. */
 export function clientInfo(list: unknown[]): Map<string, { name: string; vendor: string; ip: string }> {
@@ -29,6 +32,12 @@ export class GatewayPoller {
   private key = '';
   private prev: Counters | undefined;
   private window: { down: number; up: number; flood: number | null; fromGw: number | null }[] = [];
+  private usage: Reading[] = [];
+  private prevBytes: { t: number; m: Map<string, ClientBytes> } | undefined;
+  private dpiSnap: Map<string, Map<number, number>> | undefined;
+  private dpiRecent = new Map<string, { t: number; apps: { cat: string; mb: number }[] }>();
+  private dpiOk: boolean | undefined;
+  private ticks = 0;
   private timer: NodeJS.Timeout | null = null;
   private busy = false;
 
@@ -58,6 +67,8 @@ export class GatewayPoller {
       this.client = new UniFiClient(this.cfg.host, this.cfg.username, this.password());
       this.key = k;
       this.prev = undefined;
+      this.prevBytes = undefined;
+      this.dpiSnap = undefined;
     }
     return this.client;
   }
@@ -91,12 +102,40 @@ export class GatewayPoller {
     const stats = parseStats(raw, this.prev, cur);
     this.prev = cur;
     this.clients = clientInfo(raw.clients);
+    // who is using the connection: each device's speed since the last reading
+    const now = Date.now();
+    const bytes = clientBytes(raw.clients, raw.networks);
+    const rates: ClientRate[] = this.prevBytes ? clientRates(this.prevBytes.m, bytes, (now - this.prevBytes.t) / 1000) : [];
+    this.prevBytes = { t: now, m: bytes };
+    if (rates.length || stats.wanDownMbps != null) {
+      const sum = rates.reduce((a, r) => a + r.downMbps, 0);
+      this.usage.push({ t: now, totalDown: stats.wanDownMbps ?? Math.round(sum * 100) / 100, rates: rates.slice(0, 8) });
+    }
+    if (this.ticks++ % DPI_EVERY === 0) await this.readDpi(now);
     const w = pickWatchPort(stats.ports, this.cfg.watchPort);
     if (w && w.txMbps !== null && w.rxMbps !== null) {
       const f = w.txFloodPps != null || w.rxFloodPps != null ? (w.txFloodPps ?? 0) + (w.rxFloodPps ?? 0) : null;
       this.window.push({ down: w.txMbps, up: w.rxMbps, flood: f, fromGw: w.txFloodPps ?? null });
     }
     this.latest = stats;
+  }
+
+  /** What kind of traffic each device moved since the last DPI reading. Optional: failures are ignored. */
+  private async readDpi(now: number) {
+    try {
+      const cur = parseDpi(await this.conn().post('stat/stadpi', { type: 'by_app' }));
+      if (this.dpiSnap) {
+        for (const [mac, cats] of cur) {
+          const apps = dpiDelta(this.dpiSnap.get(mac), cats);
+          if (apps.length) this.dpiRecent.set(mac, { t: now, apps: apps.slice(0, 3) });
+        }
+      }
+      this.dpiSnap = cur;
+      this.dpiOk = cur.size > 0;
+      for (const [mac, v] of this.dpiRecent) if (now - v.t > 5 * 60_000) this.dpiRecent.delete(mac);
+    } catch {
+      this.dpiOk = false;
+    }
   }
 
   /** One-off login and read, for the Test button in Settings. */
@@ -143,6 +182,15 @@ export class GatewayPoller {
       }
     }
     this.window = [];
+    const m = summariseMinute(this.usage);
+    const withApps = <T extends { mac: string; apps?: { cat: string; mb: number }[] }>(c: T): T => {
+      const d = this.dpiRecent.get(c.mac);
+      return d && t - d.t < 2 * 60_000 ? { ...c, apps: d.apps } : c;
+    };
+    stats.top = m.top.map(withApps);
+    stats.peak = m.peak ? { ...m.peak, clients: m.peak.clients.map(withApps) } : null;
+    stats.dpiOk = this.dpiOk;
+    this.usage = [];
     return { t, id: 'gw:' + this.cfg.id, ping: { sent: 0, received: 0, lossPct: 0, avg: null, min: null, max: null }, gw: stats };
   }
 }

@@ -54,6 +54,7 @@ export function defaultConfig(): Config {
     chain: ['house-sender', 'lookout-station', 'lookout-sender', 'mast2-station', 'monks-station'],
     gateways: [{ id: 'udr3', name: 'House router (UDR3)', host: '192.168.4.178', username: '', passwordEnc: '', watchPort: null, enabled: false }],
     backboneMbps: 60,
+    spikeMbps: 40,
     thresholds: {
       latencyMs: 40,
       lossPct: 5,
@@ -91,6 +92,7 @@ export class ConfigStore {
         server: { ...def.server, ...(raw.server ?? {}) },
         gateways: raw.gateways ?? def.gateways,
         backboneMbps: raw.backboneMbps ?? def.backboneMbps,
+        spikeMbps: raw.spikeMbps ?? def.spikeMbps,
       };
     } catch {
       this.write(def);

@@ -140,6 +140,10 @@ export function Settings({ s, toast, onSaved, theme, setTheme }: { s: AppState; 
                 Backbone can really carry (Mbps)
                 <input type="number" value={c.backboneMbps ?? 60} onChange={(e) => set('backboneMbps', Number(e.target.value))} />
               </label>
+              <label className="f">
+                Log who caused a spike above (Mbps)
+                <input type="number" min={5} value={c.spikeMbps ?? 40} onChange={(e) => set('spikeMbps', Number(e.target.value))} />
+              </label>
             </div>
             <div className="card-b row-actions">
               <button

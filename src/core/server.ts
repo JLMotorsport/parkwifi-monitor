@@ -107,7 +107,7 @@ export function startServer(m: Monitor, uiDir: string, actions: AppActions = {})
           case 'PUT /api/config': {
             const body = (await readBody(req)) as Omit<Partial<Config>, 'gateways'> & { password?: string; gateways?: PublicGateway[] };
             const c = m.cfg.config;
-            const allowed: (keyof Config)[] = ['username', 'speedTestPort', 'pollSeconds', 'pingCount', 'pingSize', 'devices', 'probes', 'chain', 'thresholds', 'notifications', 'retentionDays', 'server', 'sshPort', 'trialMinutes', 'backboneMbps'];
+            const allowed: (keyof Config)[] = ['username', 'speedTestPort', 'pollSeconds', 'pingCount', 'pingSize', 'devices', 'probes', 'chain', 'thresholds', 'notifications', 'retentionDays', 'server', 'sshPort', 'trialMinutes', 'backboneMbps', 'spikeMbps'];
             for (const k of allowed) if (body[k] !== undefined) (c as unknown as Record<string, unknown>)[k] = body[k];
             if (Array.isArray(body.gateways)) {
               c.gateways = body.gateways.map((g) => {

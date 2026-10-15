@@ -62,6 +62,8 @@ export interface Config {
   gateways?: GatewayCfg[];
   /** real-world throughput the house to Lookout backbone can carry, in Mbps */
   backboneMbps?: number;
+  /** internet download (Mbps) above which a moment is logged with the devices behind it */
+  spikeMbps?: number;
 }
 
 export interface GatewayCfg {
@@ -129,6 +131,38 @@ export interface GatewayStats {
     /** of which sent by UDR3 itself (mDNS proxy etc.) */
     floodFromGatewayPps?: number | null;
   };
+  /** devices that moved the most data over the minute */
+  top?: TopClient[];
+  /** the busiest 15 s internet reading in the minute, and the devices behind it */
+  peak?: { t: number; totalDown: number; clients: TopClient[] } | null;
+  /** false when UniFi's traffic identification gave nothing (switched off, or not supported) */
+  dpiOk?: boolean;
+}
+
+/** A device using the internet connection through a gateway, over a minute or at one moment. */
+export interface TopClient {
+  mac: string;
+  name: string;
+  vendor: string;
+  ip: string;
+  /** the UniFi network it is on: "Lookout & Monks", "Default" (the house) ... */
+  network: string;
+  downMbps: number;
+  upMbps: number;
+  peakMbps: number;
+  /** its share of the internet download at the busiest moment, in % */
+  share?: number | null;
+  /** what kind of traffic, from UniFi's traffic identification, in MB over about a minute */
+  apps?: { cat: string; mb: number }[];
+}
+
+/** A moment the internet download through a gateway went over the spike level, and who did it. */
+export interface BusyMoment {
+  t: number;
+  gatewayId: string;
+  gatewayName: string;
+  totalDown: number;
+  clients: TopClient[];
 }
 
 export interface PingResult {
@@ -397,6 +431,8 @@ export interface AppState {
   backboneMbps: number;
   trial: ChangeTrial | null;
   talkers: Talker[];
+  busy: BusyMoment[];
+  spikeMbps: number;
   acl: AclState;
   traces: TraceResult[];
   traceRunning: string | null;
