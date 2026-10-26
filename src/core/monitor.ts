@@ -13,7 +13,7 @@ import { GatewayPoller } from './gateway';
 import { ConfigStore, SecretBox, slug } from './config';
 import { ping, pingSeries, reach } from './ping';
 import { HistoryStore } from './store';
-import type { AlertItem, AppState, BusyMoment, DeviceCfg, DeviceState, Sample, SpeedTestRecord, Station, TraceResult, UpdateInfo } from './types';
+import type { AlertItem, AppState, BusyMoment, DeviceCfg, GatewayCfg, DeviceState, Sample, SpeedTestRecord, Station, TraceResult, UpdateInfo } from './types';
 
 async function pool<T, R>(items: T[], limit: number, fn: (t: T) => Promise<R>): Promise<R[]> {
   const out: R[] = new Array(items.length);
@@ -116,7 +116,7 @@ export class Monitor extends EventEmitter {
       log: (msg) => console.log(`[blocks] ${msg}`),
     });
     this.busyFile = path.join(dataDir, 'busy.jsonl');
-    this.busy = readJsonl<BusyMoment>(this.busyFile, 500);
+    this.busy = parkOnly(readJsonl<BusyMoment>(this.busyFile, 500), this.cfg.config.gateways ?? []);
     this.tracesFile = path.join(dataDir, 'traces.jsonl');
     this.traces = readTraces(this.tracesFile);
     try {
@@ -644,6 +644,21 @@ export class Monitor extends EventEmitter {
     if (!this.polling) this.schedule(1500);
     this.emit('change');
   }
+}
+
+/**
+ * Spikes logged before v0.8.1 counted the house's devices too (UDR3 routes both). Drop the house's
+ * devices from them, and drop a spike altogether if no customer device was behind it.
+ */
+export function parkOnly(list: BusyMoment[], gateways: GatewayCfg[]): BusyMoment[] {
+  const out: BusyMoment[] = [];
+  for (const m of list) {
+    const g = gateways.find((x) => 'gw:' + x.id === m.gatewayId);
+    const isPark = (n: string) => (g?.parkNetwork ? n === g.parkNetwork : /lookout|monks/i.test(n));
+    const clients = m.clients.filter((c) => isPark(c.network ?? '') || (!c.network && (c.ip ?? '').startsWith('192.168.2.')));
+    if (clients.length) out.push(clients.length === m.clients.length ? m : { ...m, clients });
+  }
+  return out;
 }
 
 function readJsonl<T>(file: string, keep: number): T[] {

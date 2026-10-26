@@ -119,6 +119,7 @@ export function startServer(m: Monitor, uiDir: string, actions: AppActions = {})
                   username: String(g.username ?? '').trim(),
                   passwordEnc: g.password ? m.cfg.seal(g.password) : (old?.passwordEnc ?? ''),
                   watchPort: g.watchPort === null || g.watchPort === undefined || (g.watchPort as unknown) === '' ? null : Number(g.watchPort),
+                  parkNetwork: typeof g.parkNetwork === 'string' && g.parkNetwork.trim() ? g.parkNetwork.trim() : null,
                   enabled: !!g.enabled,
                 };
               });

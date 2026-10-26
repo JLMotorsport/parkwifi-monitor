@@ -22,14 +22,57 @@ export interface ClientBytes {
   up: number;
 }
 
-/** Byte counters per device from UniFi's client list. Wired devices report under "wired-". */
-export function clientBytes(clients: unknown[], networks: unknown[]): Map<string, ClientBytes> {
+export interface ParkNetwork {
+  name: string;
+  /** e.g. "192.168.2.1/24"; empty if UniFi didn't give one */
+  subnet: string;
+}
+
+/** True if an IPv4 address falls inside a subnet written as "a.b.c.d/n". */
+export function inSubnet(ip: string, cidr: string): boolean {
+  const [base, bitsS] = cidr.split('/');
+  const bits = Number(bitsS);
+  const n = (x: string) => {
+    const p = x.split('.').map(Number);
+    return p.length === 4 && p.every((v) => Number.isInteger(v) && v >= 0 && v <= 255) ? ((p[0] << 24) >>> 0) + (p[1] << 16) + (p[2] << 8) + p[3] : null;
+  };
+  const a = n(ip);
+  const b = n(base ?? '');
+  if (a === null || b === null || !Number.isInteger(bits) || bits < 0 || bits > 32) return false;
+  const mask = bits === 0 ? 0 : (0xffffffff << (32 - bits)) >>> 0;
+  return ((a & mask) >>> 0) === ((b & mask) >>> 0);
+}
+
+/**
+ * The customers' network on the router: the one picked in Settings, else the one named after
+ * Lookout or Monks. The house shares UDR3, so without this the house's devices would be counted too.
+ */
+export function pickParkNetwork(networks: unknown[], chosen: string | null | undefined): ParkNetwork | null {
+  const list = (networks as O[]).filter((n) => str(n.purpose) !== 'wan' && str(n.name));
+  const hit = chosen ? list.find((n) => str(n.name) === chosen || str(n._id) === chosen) : list.find((n) => /lookout|monks/i.test(str(n.name)));
+  return hit ? { name: str(hit.name), subnet: str(hit.ip_subnet) } : null;
+}
+
+/** Is this device on the customers' network? By the network UniFi says it's on, else by its address. */
+export function onPark(network: string, ip: string, park: ParkNetwork): boolean {
+  if (network) return network === park.name;
+  return !!park.subnet && !!ip && inSubnet(ip, park.subnet);
+}
+
+/**
+ * Byte counters per device from UniFi's client list. Wired devices report under "wired-".
+ * With `only`, devices on other networks (the house) are left out.
+ */
+export function clientBytes(clients: unknown[], networks: unknown[], only?: ParkNetwork | null): Map<string, ClientBytes> {
   const netName = new Map<string, string>();
   for (const n of networks as O[]) netName.set(str(n._id), str(n.name));
   const out = new Map<string, ClientBytes>();
   for (const c of clients as O[]) {
     const mac = str(c.mac).toUpperCase();
     if (!mac) continue;
+    const network = netName.get(str(c.network_id)) || str(c.network);
+    const ip = str(c.ip) || str(c.last_ip);
+    if (only && !onPark(network, ip, only)) continue;
     const pick = (a: string, b: string) => {
       const x = num(c[a]);
       const y = num(c[b]);
@@ -43,8 +86,8 @@ export function clientBytes(clients: unknown[], networks: unknown[]): Map<string
       mac,
       name: str(c.name) || str(c.hostname),
       vendor: str(c.oui),
-      ip: str(c.ip) || str(c.last_ip),
-      network: netName.get(str(c.network_id)) || str(c.network),
+      ip,
+      network,
       down,
       up,
     });

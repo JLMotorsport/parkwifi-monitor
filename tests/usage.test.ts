@@ -1,5 +1,6 @@
 import { describe, expect, it } from 'vitest';
-import { categoryName, clientBytes, clientRates, dpiDelta, parseDpi, summariseMinute } from '../src/core/usage';
+import { categoryName, clientBytes, clientRates, dpiDelta, inSubnet, parseDpi, pickParkNetwork, summariseMinute } from '../src/core/usage';
+import { parkOnly } from '../src/core/monitor';
 
 const nets = [
   { _id: 'n1', name: 'Lookout & Monks' },
@@ -71,5 +72,48 @@ describe('summariseMinute', () => {
   });
   it('handles an empty minute', () => {
     expect(summariseMinute([])).toEqual({ top: [], peak: null });
+  });
+});
+
+describe('customers only (UDR3 also routes the house)', () => {
+  const networks = [
+    { _id: 'n1', name: 'Lookout & Monks', ip_subnet: '192.168.2.1/24', purpose: 'corporate' },
+    { _id: 'n2', name: 'Default', ip_subnet: '192.168.5.1/24', purpose: 'corporate' },
+    { _id: 'w', name: 'Internet 1', purpose: 'wan' },
+  ];
+  const clients = [
+    { mac: 'aa:aa:aa:aa:aa:01', name: 'Caravan TV', ip: '192.168.2.40', network_id: 'n1', tx_bytes: 1, rx_bytes: 1 },
+    { mac: 'aa:aa:aa:aa:aa:02', name: 'Lounge Fire Stick', ip: '192.168.5.202', network_id: 'n2', tx_bytes: 1, rx_bytes: 1 },
+    { mac: 'aa:aa:aa:aa:aa:03', name: 'No network field', ip: '192.168.2.77', tx_bytes: 1, rx_bytes: 1 },
+    { mac: 'aa:aa:aa:aa:aa:04', name: 'House, no network field', ip: '192.168.5.9', tx_bytes: 1, rx_bytes: 1 },
+  ];
+  it('finds the customers network by name, or the one picked in Settings', () => {
+    expect(pickParkNetwork(networks, null)).toEqual({ name: 'Lookout & Monks', subnet: '192.168.2.1/24' });
+    expect(pickParkNetwork(networks, 'Default')?.name).toBe('Default');
+    expect(pickParkNetwork([{ _id: 'n2', name: 'Default' }], null)).toBeNull();
+  });
+  it('leaves the house devices out, by network or else by address', () => {
+    const m = clientBytes(clients, networks, pickParkNetwork(networks, null));
+    expect([...m.values()].map((c) => c.name).sort()).toEqual(['Caravan TV', 'No network field']);
+    expect(clientBytes(clients, networks).size).toBe(4);
+  });
+  it('checks addresses against a subnet', () => {
+    expect(inSubnet('192.168.2.200', '192.168.2.1/24')).toBe(true);
+    expect(inSubnet('192.168.5.2', '192.168.2.1/24')).toBe(false);
+    expect(inSubnet('10.1.2.3', '10.0.0.0/8')).toBe(true);
+    expect(inSubnet('nonsense', '192.168.2.1/24')).toBe(false);
+  });
+});
+
+describe('cleaning spikes logged before the fix', () => {
+  const tc = (name: string, network: string, ip: string) => ({ mac: name, name, vendor: '', ip, network, downMbps: 10, upMbps: 1, peakMbps: 11 });
+  it('drops house devices, and spikes with no customer device at all', () => {
+    const list = [
+      { t: 1, gatewayId: 'gw:udr3', gatewayName: 'UDR3', totalDown: 80, clients: [tc('Fire Stick', 'Default', '192.168.5.202')] },
+      { t: 2, gatewayId: 'gw:udr3', gatewayName: 'UDR3', totalDown: 90, clients: [tc('Fire Stick', 'Default', '192.168.5.202'), tc('Caravan', 'Lookout & Monks', '192.168.2.4')] },
+    ];
+    const out = parkOnly(list, [{ id: 'udr3', name: 'UDR3', host: '', username: '', passwordEnc: '', watchPort: null, enabled: true }]);
+    expect(out).toHaveLength(1);
+    expect(out[0].clients.map((c) => c.name)).toEqual(['Caravan']);
   });
 });

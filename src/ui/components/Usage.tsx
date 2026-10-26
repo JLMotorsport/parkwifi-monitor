@@ -17,10 +17,15 @@ export function UsageCard({ s }: { s: AppState }) {
       <div className="card-h">
         <h2>Who is using the internet</h2>
         <span className="sub">
-          Through {g.cfg.name}: every device's speed every 15 s. Spikes over {s.spikeMbps} Mbps are logged with the devices behind them (change the level in
+          Devices on {gw.usageNetwork ?? 'the customers\' network'} (house devices are left out): every device's speed every 15 s. Spikes over {s.spikeMbps} Mbps are logged with the devices behind them (change the level in
           Settings). The kind of traffic comes from UniFi's traffic identification; websites are not recorded.
         </span>
       </div>
+      {gw.usageNetwork === null && (
+        <div className="card-b hint">
+          No customers' network found on {g.cfg.name}, so nothing is being counted. Pick it in Settings, under {g.cfg.name}.
+        </div>
+      )}
       {dpiOff && (
         <div className="card-b hint">
           UniFi isn't reporting the kind of traffic. Turn on <b>Traffic Identification</b> on {g.cfg.name} (in UniFi, Settings, then Security / CyberSecure, depending on
@@ -77,7 +82,7 @@ export function UsageCard({ s }: { s: AppState }) {
             <thead>
               <tr>
                 <th>When</th>
-                <th className="r">Internet down</th>
+                <th className="r">To the caravans</th>
                 <th>Mostly</th>
                 <th>Kind of traffic</th>
                 <th>Also</th>

@@ -9,7 +9,7 @@ export function Settings({ s, toast, onSaved, theme, setTheme }: { s: AppState; 
   const [password, setPassword] = useState('');
   const [busy, setBusy] = useState('');
   const [tests, setTests] = useState<Record<string, string>>({});
-  const [gwTest, setGwTest] = useState<Record<string, { ok: boolean; message: string; ports: { idx: number; name: string; up: boolean }[] }>>({});
+  const [gwTest, setGwTest] = useState<Record<string, { ok: boolean; message: string; ports: { idx: number; name: string; up: boolean }[]; networks?: string[] }>>({});
 
   useEffect(() => {
     api.config().then(setC).catch((e) => toast(String(e)));
@@ -132,6 +132,17 @@ export function Settings({ s, toast, onSaved, theme, setTheme }: { s: AppState; 
                     <option key={p.idx} value={p.idx}>
                       {p.name}
                       {p.up ? '' : ' (down)'}
+                    </option>
+                  ))}
+                </select>
+              </label>
+              <label className="f">
+                Customers' network (usage and spikes count only these devices)
+                <select value={g.parkNetwork ?? ''} onChange={(e) => gwSet(i, { parkNetwork: e.target.value === '' ? null : e.target.value })}>
+                  <option value="">Auto (network named Lookout or Monks)</option>
+                  {[...new Set([...(t?.networks ?? []), ...(g.parkNetwork ? [g.parkNetwork] : [])])].map((n) => (
+                    <option key={n} value={n}>
+                      {n}
                     </option>
                   ))}
                 </select>

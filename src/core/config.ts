@@ -52,7 +52,7 @@ export function defaultConfig(): Config {
       { id: 'udr3', name: 'House router (UDR3)', host: '192.168.4.178' },
     ],
     chain: ['house-sender', 'lookout-station', 'lookout-sender', 'mast2-station', 'monks-station'],
-    gateways: [{ id: 'udr3', name: 'House router (UDR3)', host: '192.168.4.178', username: '', passwordEnc: '', watchPort: null, enabled: false }],
+    gateways: [{ id: 'udr3', name: 'House router (UDR3)', host: '192.168.4.178', username: '', passwordEnc: '', watchPort: null, parkNetwork: null, enabled: false }],
     backboneMbps: 60,
     spikeMbps: 40,
     thresholds: {

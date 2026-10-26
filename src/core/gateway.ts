@@ -1,7 +1,7 @@
 // Polls one UniFi gateway every 15 seconds so short bursts on the radio-feeding port are caught,
 // then hands the monitor one sample per main poll: last readings plus the minute's average and peak.
 import { UniFiClient, UniFiError, parseStats, pickWatchPort, readCounters, gatewayDevice, type Counters } from './unifi';
-import { clientBytes, clientRates, dpiDelta, parseDpi, summariseMinute, type ClientBytes, type ClientRate, type Reading } from './usage';
+import { clientBytes, clientRates, dpiDelta, parseDpi, pickParkNetwork, summariseMinute, type ClientBytes, type ClientRate, type ParkNetwork, type Reading } from './usage';
 import type { GatewayCfg, GatewayStats, Sample } from './types';
 
 const FAST_MS = 15_000;
@@ -37,6 +37,7 @@ export class GatewayPoller {
   private dpiSnap: Map<string, Map<number, number>> | undefined;
   private dpiRecent = new Map<string, { t: number; apps: { cat: string; mb: number }[] }>();
   private dpiOk: boolean | undefined;
+  private park: ParkNetwork | null = null;
   private ticks = 0;
   private timer: NodeJS.Timeout | null = null;
   private busy = false;
@@ -102,17 +103,23 @@ export class GatewayPoller {
     const stats = parseStats(raw, this.prev, cur);
     this.prev = cur;
     this.clients = clientInfo(raw.clients);
-    // who is using the connection: each device's speed since the last reading
+    const w = pickWatchPort(stats.ports, this.cfg.watchPort);
+    // who is using the customers' network: each device's speed since the last reading. UDR3 also
+    // routes the house, so only devices on the Lookout & Monks network are counted.
     const now = Date.now();
-    const bytes = clientBytes(raw.clients, raw.networks);
-    const rates: ClientRate[] = this.prevBytes ? clientRates(this.prevBytes.m, bytes, (now - this.prevBytes.t) / 1000) : [];
-    this.prevBytes = { t: now, m: bytes };
-    if (rates.length || stats.wanDownMbps != null) {
-      const sum = rates.reduce((a, r) => a + r.downMbps, 0);
-      this.usage.push({ t: now, totalDown: stats.wanDownMbps ?? Math.round(sum * 100) / 100, rates: rates.slice(0, 8) });
+    const park = pickParkNetwork(raw.networks, this.cfg.parkNetwork);
+    if (park?.name !== this.park?.name) this.prevBytes = undefined;
+    this.park = park;
+    if (park) {
+      const bytes = clientBytes(raw.clients, raw.networks, park);
+      const rates: ClientRate[] = this.prevBytes ? clientRates(this.prevBytes.m, bytes, (now - this.prevBytes.t) / 1000) : [];
+      this.prevBytes = { t: now, m: bytes };
+      // the spike size is what went to the caravans (the radio port), not the whole internet connection
+      const sum = Math.round(rates.reduce((a, r) => a + r.downMbps, 0) * 100) / 100;
+      const toPark = w?.txMbps ?? null;
+      if (rates.length || toPark !== null) this.usage.push({ t: now, totalDown: toPark ?? sum, rates: rates.slice(0, 8) });
     }
     if (this.ticks++ % DPI_EVERY === 0) await this.readDpi(now);
-    const w = pickWatchPort(stats.ports, this.cfg.watchPort);
     if (w && w.txMbps !== null && w.rxMbps !== null) {
       const f = w.txFloodPps != null || w.rxFloodPps != null ? (w.txFloodPps ?? 0) + (w.rxFloodPps ?? 0) : null;
       this.window.push({ down: w.txMbps, up: w.rxMbps, flood: f, fromGw: w.txFloodPps ?? null });
@@ -139,7 +146,7 @@ export class GatewayPoller {
   }
 
   /** One-off login and read, for the Test button in Settings. */
-  async test(): Promise<{ ok: boolean; message: string; ports: { idx: number; name: string; up: boolean }[] }> {
+  async test(): Promise<{ ok: boolean; message: string; ports: { idx: number; name: string; up: boolean }[]; networks?: string[] }> {
     try {
       const c = new UniFiClient(this.cfg.host, this.cfg.username, this.password());
       const raw = await c.raw();
@@ -147,10 +154,15 @@ export class GatewayPoller {
       if (!dev) return { ok: false, message: 'Logged in, but no gateway was listed.', ports: [] };
       const s = parseStats(raw, undefined, readCounters(dev, Date.now()));
       const w = pickWatchPort(s.ports, this.cfg.watchPort);
+      const park = pickParkNetwork(raw.networks, this.cfg.parkNetwork);
       return {
         ok: true,
-        message: `Connected to ${s.name || s.model || this.cfg.host}. ${s.ports.length} ports, ${s.networks.length} networks.${w ? ` Watching "${w.name}".` : ' Pick the port that feeds the radios.'}`,
+        message:
+          `Connected to ${s.name || s.model || this.cfg.host}. ${s.ports.length} ports, ${s.networks.length} networks.` +
+          (w ? ` Watching "${w.name}".` : ' Pick the port that feeds the radios.') +
+          (park ? ` Counting devices on "${park.name}" only.` : ' Pick the customers\' network.'),
         ports: s.ports.map((p) => ({ idx: p.idx, name: p.name, up: p.up })),
+        networks: s.networks.map((n) => n.name).filter(Boolean),
       };
     } catch (e) {
       return { ok: false, message: (e as Error).message, ports: [] };
@@ -190,6 +202,7 @@ export class GatewayPoller {
     stats.top = m.top.map(withApps);
     stats.peak = m.peak ? { ...m.peak, clients: m.peak.clients.map(withApps) } : null;
     stats.dpiOk = this.dpiOk;
+    stats.usageNetwork = this.park?.name ?? null;
     this.usage = [];
     return { t, id: 'gw:' + this.cfg.id, ping: { sent: 0, received: 0, lossPct: 0, avg: null, min: null, max: null }, gw: stats };
   }

@@ -14,10 +14,15 @@ const pct = (xs: number[], p: number) => {
 const nums = (xs: (number | null | undefined)[]) => xs.filter((x): x is number => typeof x === 'number' && Number.isFinite(x));
 
 /** The devices that moved the most data in an hour, from each minute's top list (MB). */
-function heaviest(rows: Sample[]) {
+/** Is this the customers' network? The one picked in Settings, else one named after Lookout or Monks. */
+const parkTest = (chosen: string | null | undefined) => (n: string) => (chosen ? n === chosen : /lookout|monks/i.test(n));
+
+function heaviest(rows: Sample[], isPark: (network: string) => boolean) {
   const by = new Map<string, { name: string; network: string; ip: string; down: number; up: number; cats: Map<string, number> }>();
   for (const s of rows) {
     for (const c of s.gw?.top ?? []) {
+      // older readings counted the house's devices too
+      if (c.network && !isPark(c.network)) continue;
       const e = by.get(c.mac) ?? { name: [c.name, c.vendor].filter(Boolean).join(', '), network: c.network, ip: c.ip, down: 0, up: 0, cats: new Map() };
       // each entry is a minute's average speed: Mbps x 60 s / 8 = MB
       e.down += (c.downMbps * 60) / 8;
@@ -138,8 +143,8 @@ export function buildExport(m: Monitor, hours: number) {
       'pcFaultPolls = polls taken while the PC running the app had a poor connection itself (its own router or internet was slow too). Their ping figures are left out of the stats.',
       'ccqMin ignores readings of 0, which an AP reports when nobody is connected.',
       'floodPps = broadcast + multicast packets per second on the radio-feeding port; every device on the radios has to hear these. Under about 60 is normal.',
-      'busyMoments = each minute whose busiest 15 s of internet download through the gateway passed the spike level, with the devices behind it, their share and the kind of traffic (UniFi traffic identification). Websites are not recorded.',
-      'gateways[].hourly.heaviestDevices = devices that moved the most data that hour (MB), counted only while they were among the top five each minute, so small users are left out.',
+      'busyMoments = each minute whose busiest 15 s of download to the caravans (the radio port) passed the spike level, counting only devices on the customers\' network (not the house), with the devices behind it, their share and the kind of traffic (UniFi traffic identification). Websites are not recorded.',
+      'gateways[].hourly.heaviestDevices = customer devices (not the house) that moved the most data that hour (MB), counted only while they were among the top five each minute, so small users are left out.',
       `A client counts as weak at or below ${c.thresholds.weakSignal} dBm.`,
     ],
     settings: { ...safeConfig, server: { ...safeConfig.server, token: '(removed)' } },
@@ -197,7 +202,7 @@ export function buildExport(m: Monitor, hours: number) {
               wanLatencyAvgMs: mean(lat),
               wanLatencyWorstMs: max(lat),
               clientsByNetwork: nets.map((n) => `${n.name}: ${n.clients}${n.poolSize ? '/' + n.poolSize : ''}`).join(', ') || null,
-              heaviestDevices: heaviest(rs),
+              heaviestDevices: heaviest(rs, parkTest(g.parkNetwork)),
             });
           }),
       };

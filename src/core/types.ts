@@ -76,6 +76,8 @@ export interface GatewayCfg {
   passwordEnc: string;
   /** port_idx on the gateway that feeds the radios; null = pick by name (Lookout/Monks) */
   watchPort: number | null;
+  /** name of the customers' network on the router; null = pick by name (Lookout/Monks) */
+  parkNetwork?: string | null;
   enabled: boolean;
 }
 
@@ -137,6 +139,8 @@ export interface GatewayStats {
   peak?: { t: number; totalDown: number; clients: TopClient[] } | null;
   /** false when UniFi's traffic identification gave nothing (switched off, or not supported) */
   dpiOk?: boolean;
+  /** the network the usage figures cover (the customers'); null if none was found */
+  usageNetwork?: string | null;
 }
 
 /** A device using the internet connection through a gateway, over a minute or at one moment. */
@@ -150,7 +154,7 @@ export interface TopClient {
   downMbps: number;
   upMbps: number;
   peakMbps: number;
-  /** its share of the internet download at the busiest moment, in % */
+  /** its share of the download to the caravans at the busiest moment, in % */
   share?: number | null;
   /** what kind of traffic, from UniFi's traffic identification, in MB over about a minute */
   apps?: { cat: string; mb: number }[];
